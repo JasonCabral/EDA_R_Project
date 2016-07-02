@@ -1,0 +1,2233 @@
+---
+title: 'Project 4 - Data Analysis with R '
+author: "Jason Cabral"
+date: "January 5, 2016"
+output: html_document
+---
+
+The dataset I chose to analyze was the Prosper Loan Data. My financial history lends me a particular interest in learning more about the story of loans through the data.
+
+```{r initilization_2, echo=FALSE, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE}
+setwd("E:/Udacity/R")
+library(ggplot2)
+#library(plyr)
+library(dplyr)
+library(GGally)
+library(stats)
+library(gridExtra)
+library(lubridate)
+library(memisc)
+library(car)
+library(scales)
+library(RColorBrewer)
+library(knitr)
+library(pander)
+library(reshape)
+
+
+
+
+select <- dplyr::select
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+loanData <- read.csv("prosperLoanData.csv")
+
+```
+
+####Subset the Data
+```{r dataframe_subset, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE}
+loans <- select(loanData, CreditGrade, Term, BorrowerAPR, BorrowerRate, 
+                ProsperRating..Alpha., ListingCategory..numeric., 
+                IsBorrowerHomeowner, CreditScoreRangeLower, 
+                CreditScoreRangeUpper, FirstRecordedCreditLine, 
+                OpenCreditLines, TotalCreditLinespast7years, 
+                OpenRevolvingAccounts, OpenRevolvingMonthlyPayment, 
+                InquiriesLast6Months, DelinquenciesLast7Years, 
+                RevolvingCreditBalance, BankcardUtilization, 
+                AvailableBankcardCredit, DebtToIncomeRatio, LoanNumber, 
+                LoanOriginalAmount, MonthlyLoanPayment, Investors, 
+                LoanOriginationDate, DateCreditPulled, StatedMonthlyIncome)
+
+str(loans)
+```
+
+####Check Credit Rating Levels
+
+ProsperRating..Alpha.
+```{r credit_levels_prosper, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+pander(summary(loanData$ProsperRating..Alpha.))
+```
+
+CreditGrade
+```{r credit_levels_creditgrade, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(loanData$CreditGrade))
+```
+****
+Combine and Clean the Data
+```{r new_variables_and_cleaning, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE}
+#Combine Credit Rating Systems
+loans$ProsperCreditGrade <- 
+  as.factor(ifelse(loans$ProsperRating..Alpha. == "", 
+                   as.character(loans$CreditGrade), 
+                   as.character(loans$ProsperRating..Alpha.)))
+
+#Anazlyze and Remove "No Credit" Loans
+
+loans <- filter(loans, ProsperCreditGrade !="NC")
+loans <- filter(loans, ProsperCreditGrade !="")
+
+#Add Credit Score System variable
+#2013-09-07 14:08:48 - Last before transition
+#2013-09-08 00:23:19 - First after transition
+loans$DateCreditPulled <- ymd_hms(loans$DateCreditPulled)
+loans$CreditSystem <- 
+  (ifelse(loans$DateCreditPulled < "2013-09-07 14:08:59", "ScoreX", "FICO08"))
+loans$CreditSystem <- 
+  factor(loans$CreditSystem, levels = c("ScoreX", "FICO08"))
+
+#Add Prosper Rating System variable
+loans$ProsperRatingSystem <- 
+  (ifelse(loans$DateCreditPulled < "2009-06-01 00:00:00", 
+          "Old Rating System", "New Rating System"))
+loans$ProsperRatingSystem <- 
+  factor(loans$ProsperRatingSystem, 
+         levels = c("Old Rating System", "New Rating System"))
+
+#Add Stated Income Bucket Variable
+loans$statedIncomeBucket <- 
+  cut(loans$StatedMonthlyIncome, c(0, 4750, 483300), dig.lab = 6)
+
+#Clean Up Data Frame
+loans <- select(loans, -CreditGrade, -ProsperRating..Alpha.)
+levels(loans$ProsperCreditGrade)
+loans$ProsperCreditGrade <- 
+  factor(loans$ProsperCreditGrade, 
+         levels = c("AA", "A", "B", "C", "D", "E", "HR"))
+levels(loans$ProsperCreditGrade)
+
+#Create Average Credit Score
+loans$avgCredit <- (loans$CreditScoreRangeLower+loans$CreditScoreRangeUpper)/2
+```
+****
+```{r misc_summaries, cache=TRUE, cache.path = 'cache/', fig.path='figure/', echo=FALSE, eval=FALSE}
+summary(loans)
+summary(loans$IsBorrowerHomeowner)
+summary(loans$ProsperCreditGrade)
+summary(loans$avgCredit)
+summary(loans$LoanOriginalAmount)
+summary(loans$BorrowerRate)
+```
+
+Just over half of the borrowers were homeowners and the mean credit score for the group was approximately 696. The median original loan amount is $6500 at a mean rate of 19.28%.
+
+****
+
+```{r avgcredit_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=avgCredit, binwidth = 10) +
+  scale_x_continuous(limits = c(450,900))
+pander(summary(loans$avgCredit))
+```
+
+The plot is consistent with the median Average Credit Score of 689.5
+
+****
+
+```{r apr_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=BorrowerAPR, binwidth = .01)
+pander(summary(loans$BorrowerAPR))
+#Odd spike around 0.35%
+```
+
+I would expect to see a somewhat normal distribution here, which this is, but the spike around 0.35% indicates that this particular rate was more common than it should have been. I wonder is this is due to a special rate during one particular time. I will check this against other variables to see if I can find a trend.
+
+****
+
+```{r open_credit_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=OpenCreditLines, binwidth=1)
+pander(summary(loans$OpenCreditLines))
+```
+
+****
+
+```{r total_credit_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=TotalCreditLinespast7years, binwidth=1)
+pander(summary(loans$TotalCreditLinespast7years))
+```
+
+****
+
+Correlation Coefficient of OpenCreditLines and TotalCreditLinespast7years:
+```{r oepn_total_credit_1, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$OpenCreditLines, 
+                loans$TotalCreditLinespast7years)$estimate))
+
+ggplot(data = loans, aes(x = OpenCreditLines, 
+                         y = TotalCreditLinespast7years)) +
+  geom_point(alpha = 1/20, position = position_jitter(h=1,w=1.2)) +
+  geom_smooth() +
+  scale_x_continuous(limits = c(0,35)) +
+  scale_y_continuous(limits = c(0,100))
+```
+
+Total Credit Lines Past 7 Years Summary among Median Open Credit Line Borrowers:
+
+```{r oepn_total_credit_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, OpenCreditLines==9)$TotalCreditLinespast7years))
+```
+
+The distributions of current open credit lines and total credit lines in the past 7 years are very similar, suggesting patterns of behavior among borrowers, however with a correlation coefficient of 0.59, the relation between the two is not a strong as the distributions indicate. The scatter plot shows a clear relationship given that open credit lines are included in the total credit lines statistic, but there is quite a bit of variability among borrowers with a median number of open credit lines. Total credit lines in the last 7 years among these borrowers ranges from 9 to 85!
+
+
+****
+
+
+```{r open_revolving_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=OpenRevolvingAccounts, binwidth=1)
+```
+
+It was interesting to see that Total Credit Lines, Open Credit Lines and Open Revolving Accounts were all slightly skewed distributions. The distributions of the Open Accounts being similar is no surprise as one is a subset of the other, but I found it compelling that the distributions of current and historical open accounts was relatively similar.
+
+****
+
+```{r inquires_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=InquiriesLast6Months, binwidth=1) +
+  scale_x_continuous(limits = c(0,20))
+
+pander(summary(loans$InquiriesLast6Months))
+```
+
+The majority of borrowers have 2 or less credit inquires in the last 6 months. Shockingly, one borrower had over 100! 
+
+****
+
+```{r delinquency_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=DelinquenciesLast7Years, binwidth=1) +
+  scale_x_continuous() + scale_y_sqrt()
+```
+
+Even on a modified scale, the frequency of borrowers with no delinquencies appears vastly higher than borrowers with one or more. It was surprising to see that borrowers with more than 50 delinquencies in the last seven years were approved for a loan.
+
+```{r delinquency_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE,eval=FALSE}
+pander(table(loans$DelinquenciesLast7Years))
+```
+
+Delinquencies Summary:
+```{r delinquency_stats_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(loans$DelinquenciesLast7Years))
+```
+
+```{r delinquency_stats_3, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE,eval=FALSE}
+pander(Mode(loans$DelinquenciesLast7Years)) 
+#This was obvious in the table, but I wanted to see 
+#how `mode` worked R for future reference
+```
+
+****
+
+```{r bankcard_utilization_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=BankcardUtilization, binwidth=.01) +
+  scale_x_continuous(limits = c(0,1.25))
+```
+
+BankCardUtilization Summary:
+```{r bankcard_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(loans$BankcardUtilization))
+```
+
+```{r bankcard_stats_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE,eval=FALSE}
+Mode(subset(loans, !is.na(BankcardUtilization))$BankcardUtilization)
+```
+
+Given what we saw with delinquencies, the high frequency of borrowers with 0% BankCard utilization comes as less of a surprise. What is counter-intuitive is the distribution above 0% utilization. It would appear that borrowers with any credit card debt are more likely to be utilizing more of their available credit than less. I wonder how this would look if we excluded those borrowers who received debt consolidation loans.
+
+```{r card_utilization_loantype_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=BankcardUtilization, binwidth=.01) +
+  scale_x_continuous(limits = c(0,1.25)) + 
+  labs(title = "Bank Card Utilization") + scale_y_sqrt()
+
+g2 <- qplot(data = subset(loans, ListingCategory..numeric.!= 1), 
+            x = BankcardUtilization, binwidth=.01) + 
+  scale_x_continuous(limits = c(0,1.25)) + 
+  labs(title = "Non Debt Consolidation Bank Card Utilization") + 
+  scale_y_sqrt()
+
+g3 <- qplot(data = subset(loans, ListingCategory..numeric.= 1), 
+            x = BankcardUtilization, binwidth=.01) + 
+  scale_x_continuous(limits = c(0,1.25)) + 
+  labs(title = "Debt Consolidation Bank Card Utilization") + 
+  scale_y_sqrt()
+
+grid.arrange(g2, g3)
+```
+
+While both subsets have peak non-zero utilization close to 100%, it would appear that those borrowers with non-zero credit utilization who did not receive a debt consolidation loan were equally as likely to have little utilization as a higher amount of utilization.
+
+****
+
+```{r d2ir_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=DebtToIncomeRatio, binwidth=.01) +
+  scale_x_continuous(limits = c(0,1))
+```
+
+Debt to Income Ratio Summary:
+
+```{r d2ir_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(loans$DebtToIncomeRatio))
+```
+
+Debt to Income Ratio Distribution by Home Owner Status:
+
+```{r d2ir_homeowner_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=DebtToIncomeRatio, binwidth=.01) +
+  scale_x_continuous(limits = c(0,1)) + facet_wrap(~IsBorrowerHomeowner)
+```
+
+Non-Homeowners appear to have a significantly lower debt to income ratio than homeowners, which makes sense given a mortgage's impact on this statistic. 
+
+****
+
+```{r original_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=LoanOriginalAmount, binwidth = 1000)
+```
+
+LoanOriginalAmount Summary:
+```{r original_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(loans$LoanOriginalAmount))
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#   1000    4000    6500    8349   12000   35000 
+```
+
+```{r monthly_payment_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=MonthlyLoanPayment) +
+  coord_cartesian(xlim = c(0,1400))
+```
+
+MonthlyLoanPayment Summary:
+```{r monthly_payment_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(loans$MonthlyLoanPayment))
+```
+
+As I expected, the distribution of monthly loan payments is quite similar to the one for original loan amount. Any variance is likely due to the difference in interest rates.
+
+****
+
+```{r investors_hist, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=Investors, binwidth = 10) +
+  scale_x_continuous(limits = c(0,500)) +
+  scale_y_sqrt()
+```
+
+Investors Summary:
+```{r investors_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(loans$Investors))
+```
+
+Number of One Investor Loans:
+```{r investors_stats_mode, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(length(subset(loans, Investors==1)$Investors))
+```
+
+The distribution of Investors per loan is quite odd. While each loan has an average of 80 investors, nearly one quarter of the loans had only one investor. This explains the median of 44 investors being so much lower than the mean.
+
+****
+
+##Univariate Analysis
+
+###Structure of the Dataset
+The original Prosper Loan Dataset of 113,937 observations was refined, after removing loans with no credit information, to 113,665 observations. For the analysis, I narrowed the 81 variables to 26 that were related to basic loan and credit information.
+
+The only ordered factor variables were CreditGrade and ProsperRating..Alpha. which were combined to create the variable ProsperCreditGrade with the following levels:
+AA, A, B, C, D, E, HR 
+
+####Additionally:
+The mean credit score was approximately 696.
+The median original loan amount is $6500 at a mean rate of 19.28%, with a mean monthly payment of $272.90.
+Mean credit card utilization is 56.1% and mean delinquencies over the last 7 years is over 4, however the mode for both variables was actually 0.
+The most common Debt to Income Ratio was approximately 0.20.  
+
+###Main Features of the Dataset
+The main features of the dataset are the Credit Score, Prosper Credit Rating and the Loan Interest Rate. Much of the analysis will be focused on how each is derived, how related they are to each other and how each affects or is correlated to other loan characteristics and loan distribution.  
+
+###What other features in the dataset do you think will help support your investigation into your feature(s) of interest?
+I suspect that Term, DebtToIncomeRatio, LoanOriginalAmount, Credit Score and Credit Rating may factor into BorrowerRate for each loan. I will be interested to see how correlated with each Borrower's credit score the "credit history" variables (FirstRecordedCreditLine, TotalCreditLinespast7years, InquiriesLast6Months, DelinquenciesLast7Years) and "current credit health" variables (OpenCreditLines, OpenRevolvingAccounts, OpenRevolvingMonthlyPayment, RevolvingCreditBalance, BankcardUtilization, AvailableBankcardCredit, DebtToIncomeRatio) will be. Finally, I am hoping to investigate Investors further to see if any interesting trends arise.  
+
+###Did you create any new variables from existing variables in the dataset?
+I created 4 new variables.
+First, I addressed `CreditGrade` and `ProsperRating..numeric.`. Prosper's credit rating appears to over-gone a change in May and June 2009. These rating system variables were combined into the variable ProsperCreditGrade for analysis among the entire dataset. However, in order to conduct analysis comparing the two rating systems, I also created the variable ProsperRatingSystem which indicates whether a particular grade is from the new or old formula. Any loan that was not issued a rating was removed.
+
+Next, I created avgCredit which averaged CreditScoreRangeLower and CreditScoreRangeUpper for easier analysis
+
+Finally, in 2013 Prosper changed it's source of credit scores from Experian to FICO, so I created the variable CreditSystem that indicates which provider was used when the credit score was pulled. I would like to investigate how the function was affected by this change, including number of loans issued per credit score as well as investor behavior.
+Source: http://blog.prosper.com/2013/09/08/prosper-system-upgrade-this-weekend/
+  
+###Of the features you investigated, were there any unusual distributions? Did you perform any operations on the data to tidy, adjust, or change the form of the data? If so, why did you do this?
+Before performing any analysis, any loan with no credit grade from Prosper was removed from the dataset and the original variables with these ratings were removed as they are redundant.
+
+Due to the number of large (or small) outliers in the dataset across a number of variables, nearly all of the plots required limit setting in order to see the bulk of the data in any meaningful way. Examples of this are Credit Score, Inquiries in the last 6 months, Bankcard Utilization, Debt to income ratio and Investors.
+
+Because the highest number of borrowers have zero delinquencies over the last 7 years and 0% bankcard utilization, I square-root transformed the scales in order to see more definition in the rest of the data. I did the same thing with the Monthly Loan Payment and Investors plots.
+
+Finally, while I didn't actually change any data, I separated the Bankcard Utilization plots by whether or not the Prosper loan was a debt consolidation loan. Presumably, many of these loans were intended to pay down credit card debt and would thus skew analysis on the population's utilization.  
+
+
+#Bivariate Plots
+
+```{r grade_by_systems, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data= loans, x = ProsperCreditGrade) +
+  facet_wrap(~ProsperRatingSystem)
+
+qplot(data= loans, x = ProsperCreditGrade) +
+  facet_wrap(~CreditSystem)
+```
+
+Credit Scores ("ScoreX"):
+```{r grade_by_systems_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(table(subset(loans, CreditSystem=="ScoreX")$avgCredit))
+```
+
+Credit Scores ("FICO08"):
+```{r grade_by_systems_stats_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(table(subset(loans, CreditSystem=="FICO08")$avgCredit))
+```
+
+```{r grade_by_systems_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+qplot(data = loans, x=ProsperCreditGrade) +
+  facet_wrap(~ProsperRatingSystem + CreditSystem)
+
+```
+
+
+
+Interestingly, the number of loans given out by Credit Grade follows a somewhat normal distribution, with "C" or "D" graded borrowers receiving the highest number of loans, depending on the rating configuration of the site. I am curious whether this is by design from Prosper to group a broader subset of applicants into this category in attempt to really highlight those on the more extreme ends of the scale or if it simply reflects the type of applicants the site is getting. Presumably, better qualified borrowers have more and potentially better options than what Propser offers. Conversely, less qualified borrowers are likely not getting approved for as many loans on the site as their slightly better qualified counterparts. 
+
+When separating by Credit Score System and Prosper Rating System, the distributions become less normal, but the middle rated borrowers still account for the largest numbers of issued loans from the website. We do see that the percentage of loans going to "D", "E", and "HR" relative to the other rated loans seems to drop after the switch to FICO08. This could be due to a stricter rating process on Prosper's end or due to Investors being more discriminating with the improved information.
+
+This led me to wonder if it would be possible to determine if changes in Investor behavior were caused by this change. This will be investigated further with a multivariate plot.
+
+****
+
+```{r prosper_investors_one, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+ggplot(data = loans, aes(x = loans$ProsperCreditGrade, y = loans$Investors)) +
+  geom_boxplot() + coord_cartesian(ylim = c(0,280))
+```
+
+Percentage of Loans with one investor:
+```{r prosper_investors_stat, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+#What percentage of loans have one investor?
+pander((sum(loans$Investors=="1")/nrow(loans))*100)
+# 24.46839%
+```
+
+****
+
+Correlation Coefficient of Investors and Prosper Credit Grade:
+```{r prosper_investors_stat_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$Investors, 
+                           as.numeric(loans$ProsperCreditGrade))$estimate))
+```
+
+As we saw in the previous section, a large number of loans have only one investor. We can see this influence when plotting Investors by Credit Grade. The first quartile of A, B and C rated Borrowers is at or near one.
+ 
+
+****
+
+```{r new_loan_on_d2ir, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+loanData$newD2Ir <- ifelse(is.na(loanData$StatedMonthlyIncome) |
+                             is.na(loanData$DebtToIncomeRatio) | 
+                             is.na(loanData$MonthlyLoanPayment) | 
+                             loanData$IncomeVerifiable=="False" | 
+                             loanData$StatedMonthlyIncome < 100 | 
+                             loanData$MonthlyLoanPayment <= 0, NA, 
+                           (((loanData$StatedMonthlyIncome * 
+                                loanData$DebtToIncomeRatio) + 
+                               loanData$MonthlyLoanPayment) / 
+                              loanData$StatedMonthlyIncome))
+```
+
+```{r d2ir_by_loantype, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+p9 <- ggplot(data = subset(loans, ListingCategory..numeric. == 1 & 
+                             ListingCategory..numeric. != 0), 
+             aes(x=DebtToIncomeRatio)) +
+  geom_histogram(binwidth = 0.01) + 
+  scale_x_continuous(limits = c(0,1)) + 
+  labs(title = "Consolidation Loan") + 
+  scale_y_sqrt() + 
+  geom_vline(aes(xintercept=mean(subset(loans, ListingCategory..numeric. == 1 
+                                        & ListingCategory..numeric. 
+                                        != 0)$DebtToIncomeRatio, na.rm = T)), 
+             color = "blue", size=2)
+
+p10 <- qplot(data = subset(loans, ListingCategory..numeric. != 1 & 
+                             ListingCategory..numeric. != 0), 
+             x=DebtToIncomeRatio, binwidth=.01) + 
+  scale_x_continuous(limits = c(0,1)) + 
+  labs(title = "Non Consolidation Loan") + 
+  scale_y_sqrt() + 
+  geom_vline(aes(xintercept=mean(subset(loans, 
+                                        ListingCategory..numeric. != 1 & 
+                                          ListingCategory..numeric. 
+                                        != 0)$DebtToIncomeRatio, na.rm = T)), 
+             color = "red", size=2, show.legend = TRUE)
+
+grid.arrange(grobs = list(p9,p10), 
+             top = "Debt to Income Ratio by Loan Applied For")
+
+```
+
+****
+
+```{r new_loan_on_d2ir_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+p3 <- ggplot(data = subset(loanData, ListingCategory..numeric. != 1 & 
+                             StatedMonthlyIncome > 100 & 
+                             IncomeVerifiable=="True" & MonthlyLoanPayment > 0),
+             aes(x=DebtToIncomeRatio)) + 
+  geom_histogram(binwidth = 0.01) + 
+  scale_x_continuous(limits = c(0,1)) + 
+  labs(title = "Debt To Income Before Loan") + 
+  scale_y_sqrt() + 
+  geom_vline(aes(xintercept=mean(subset(loanData, 
+                                        ListingCategory..numeric. != 1 & 
+                                          StatedMonthlyIncome > 100 & 
+                                          IncomeVerifiable=="True" & 
+                                          MonthlyLoanPayment > 
+                                          0)$DebtToIncomeRatio, na.rm = T)), 
+             color = "blue", size=2)
+
+p4 <- qplot(data = subset(loanData, ListingCategory..numeric. != 1 & 
+                            StatedMonthlyIncome > 100 & 
+                            IncomeVerifiable=="True" & 
+                            MonthlyLoanPayment > 0), x=newD2Ir, binwidth=.01) + 
+  scale_x_continuous(limits = c(0,1)) + 
+  labs(x = "New Debt To Income Ratio", 
+       title = "Debt To Income Including Loan Payment") + 
+  scale_y_sqrt() + 
+  geom_vline(aes(xintercept=mean(subset(loanData, 
+                                        ListingCategory..numeric. != 1 & 
+                                          StatedMonthlyIncome > 100 & 
+                                          IncomeVerifiable=="True" & 
+                                          MonthlyLoanPayment > 
+                                          0)$newD2Ir, na.rm = T)), 
+             color = "red", size=2, show.legend = TRUE)
+
+grid.arrange(grobs = list(p3,p4), 
+             top = "The Effect of a New Loan on Debt to Income Ratio (excluding debt consolidation loans)")
+
+```
+
+New Debt To Income Ratio Stats:
+```{r new_loan_on_d2ir_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(loanData$newD2Ir))
+```
+
+Naturally, those applying for Debt Consolidation loans had a higher debt to income ratio prior to acceptance of the new loan. However, while borrowers of these loans likely remained at a similar debt to income level after securing the consolidation loan and presumably paying off other debt, non consolidation loan borrowers saw an increase in debt to income ratio, which was also to be expected.
+
+****
+
+```{r original_rate_points, cache=TRUE, cache.path = 'cache/',  fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=9, fig.height=6}
+# ggplot(data = loans, aes(x = LoanOriginalAmount, y = BorrowerRate)) +
+#   geom_point(alpha = 1/10, position = position_jitter(h=0, w=1)) +
+#   coord_cartesian(xlim = c(quantile(loans$LoanOriginalAmount, 0.025), 
+#                            quantile(loans$LoanOriginalAmount, 0.975)),
+#                   ylim = c(quantile(loans$BorrowerRate, 0.025),
+#                            quantile(loans$BorrowerRate, 0.975))) +
+#   geom_smooth()
+
+ggplot(data = loans, aes(x = LoanOriginalAmount, y = BorrowerRate)) +
+  coord_cartesian(xlim = c(quantile(loans$LoanOriginalAmount, 0.025), 
+                           quantile(loans$LoanOriginalAmount, 0.975)),
+                  ylim = c(quantile(loans$BorrowerRate, 0.025),
+                           quantile(loans$BorrowerRate, 0.975))) +
+  geom_smooth(aes(color=ProsperCreditGrade)) +
+  scale_x_sqrt()
+  
+
+```
+
+Correlation Coefficient of BorrowerRate and LoanOriginalAmount:
+```{r original_rate_stats, cache=TRUE, cache.path = 'cache/',  fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$BorrowerRate, 
+                           loans$LoanOriginalAmount)$estimate))
+
+```
+
+Correlation Coefficient of BorrowerRate and Prosper Credit Grade:
+```{r original_rate_stats_2, cache=TRUE, cache.path = 'cache/',  fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$BorrowerRate, 
+                           as.numeric(loans$ProsperCreditGrade))$estimate))
+
+```
+
+BorrowerRate and LoanOriginalAmount are not particularly correlated, however BorrowerRate and Prosper Credit Grade seem to be highly correlated, as the statistic, separation in the plot and website would suggest. Yet, this does not tell the whole story. Previous iterations of this plot suggested that BorrowerRate went down as LoanOriginalAmount went up. Separating by Credit Grade reveals that interest rates are generally flat within a Credit Grade group, with the exception of the lower rated borrowers, who have greater variability. We see that BorrowerRate gets lower as Loan Amount goes up for the worst rated group. I suspect that this is due to the fact that the only "HR" borrowers eligible for higher loan amounts have something in their credit profile that affords them more eligibility than the average "HR" borrower. For example, these higher loan amount "HR" borrowers may have better credit scores than the average "HR", giving them a lower interest rate, but have a large number of delinquencies in the past 7 years, which relegates them to the "HR" category. 
+
+****
+
+```{r term_and_grade_by_rate, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+p5 <- ggplot(data = loans, aes(x = ProsperCreditGrade, 
+                               y = BorrowerRate)) + 
+  geom_boxplot() + 
+  scale_y_continuous(limits = c(quantile(loans$BorrowerRate, 0.025), 
+                                quantile(loans$BorrowerRate, 0.975)))
+
+p6 <- ggplot(data = loans, aes(x = as.factor(Term), y = BorrowerRate)) +
+  geom_boxplot() + 
+  scale_y_continuous(limits = c(quantile(loans$BorrowerRate, 0.025), 
+                                quantile(loans$BorrowerRate, 0.975)))
+
+grid.arrange(p5, p6)
+```
+
+Correlation Coefficient of BorrowerRate and Term:
+```{r term_rate_stats, cache=TRUE, cache.path = 'cache/',  fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$BorrowerRate, 
+                           loans$Term)$estimate))
+```
+
+****
+
+```{r d2ir_rate_smooth, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = round(DebtToIncomeRatio / 10, digits = 3) * 10, 
+                         y = BorrowerRate)) + 
+  geom_point(alpha=1/20, position = position_jitter(h=0.01, w=.1)) + 
+  stat_smooth() +
+  scale_x_continuous(limits = c(quantile(loans$DebtToIncomeRatio, 0.025, 
+                                         na.rm = T), 
+                                quantile(loans$DebtToIncomeRatio, 
+                                         0.975, na.rm = T))) + 
+  scale_y_continuous(limits = c(quantile(loans$BorrowerRate, 
+                                         0.025, na.rm = T), 
+                                quantile(loans$BorrowerRate, 
+                                         0.975, na.rm = T)))
+  
+```
+
+Correlation Coefficient of BorrowerRate and DebtToIncomeRatio:
+```{r d2ir_rate_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$BorrowerRate, 
+                           loans$DebtToIncomeRatio)$estimate))
+```
+
+Clearly, the Prosper Credit Rating has a much bigger affect on the loan's interest rate than the original loan amount, term  or the borrower's debt to income ratio. 
+
+****
+
+```{r credit_rate_points, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = loans$avgCredit, y = loans$BorrowerRate)) +
+  geom_point(alpha = 1/20, position = position_jitter(h=0)) + 
+  coord_cartesian(xlim = c(quantile(loans$avgCredit, 0.05, na.rm = T), 
+                           quantile(loans$avgCredit, 0.95, na.rm = T))) +
+  geom_smooth()
+
+```
+
+Correlation Coefficient of BorrowerRate and avgCredit:
+```{r avgcredit_rate_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$BorrowerRate, 
+                           loans$avgCredit)$estimate))
+```
+
+****
+
+```{r rate_credit_blues, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, !is.na(loans$avgCredit)), 
+       aes(x = as.factor(avgCredit), y = BorrowerRate)) + 
+  geom_boxplot(aes(fill=as.factor(avgCredit))) + 
+  scale_x_discrete(limits = seq(649.5, 809.5, 20)) +
+  coord_flip() +
+  guides(fill = guide_legend(reverse = TRUE))
+
+```
+
+It looks like Credit Score has a similar effect on loan interest rate to Prosper Credit Grade. One would assume that the two must be closely related. 
+
+```{r prosper_credit_both_systems, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x = ProsperCreditGrade, y = avgCredit, 
+                         fill = ProsperCreditGrade)) + 
+  geom_boxplot() + 
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 0.975, na.rm = T))) + 
+  facet_wrap(~ProsperRatingSystem + CreditSystem)
+
+```
+
+Correlation Coefficient of ProsperCreditGrade and avgCredit with the old rating system and ScoreX:
+```{r credit_prosper_correlations, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(subset(loans, 
+                                  ProsperRatingSystem=="Old Rating System" & 
+                  CreditSystem=="ScoreX")$avgCredit, 
+         as.numeric(subset(loans, ProsperRatingSystem=="Old Rating System" & 
+                             CreditSystem=="ScoreX")$
+                      ProsperCreditGrade))$estimate))
+#-0.9788126 
+```
+
+Correlation Coefficient of ProsperCreditGrade and avgCredit with the new rating system and ScoreX:
+```{r credit_prosper_correlations_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(subset(loans, 
+                                  ProsperRatingSystem=="New Rating System" & 
+                  CreditSystem=="ScoreX")$avgCredit, 
+         as.numeric(subset(loans, ProsperRatingSystem=="New Rating System" & 
+                             CreditSystem=="ScoreX")$
+                      ProsperCreditGrade))$estimate))
+#-0.5822671 
+```
+
+Correlation Coefficient of ProsperCreditGrade and avgCredit with the new rating system and FICO08:
+```{r credit_prosper_correlations_3, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(subset(loans, 
+                                  ProsperRatingSystem=="New Rating System" & 
+                  CreditSystem=="FICO08")$avgCredit, 
+         as.numeric(subset(loans, ProsperRatingSystem=="New Rating System" & 
+                             CreditSystem=="FICO08")$
+                      ProsperCreditGrade))$estimate))
+#-0.5926937
+```
+
+From the plots and the correlations above, I believe the original Prosper Credit Rating may have been a simple aggregation of credit scores into easier to read letter grades. After the new rating formula was implemented, credit score was clearly heavily involved, but no longer the sole factor in assigning a Credit Rating.
+
+```{r old_system_credit_summary_1, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, eval=FALSE}
+summary(subset(loans, ProsperRatingSystem=="Old Rating System" & 
+                 ProsperCreditGrade=="AA")$avgCredit)
+#min: 769.5, max:889.5
+summary(subset(loans, ProsperRatingSystem=="Old Rating System" & 
+                 ProsperCreditGrade=="A")$avgCredit)
+#min: 709.5, max:749.5
+summary(subset(loans, ProsperRatingSystem=="Old Rating System" & 
+                 ProsperCreditGrade=="B")$avgCredit)
+#min: 689.5, max:709.5
+summary(subset(loans, ProsperRatingSystem=="Old Rating System" & 
+                 ProsperCreditGrade=="C")$avgCredit)
+#min: 649.5, max:669.5
+summary(subset(loans, ProsperRatingSystem=="Old Rating System" & 
+                 ProsperCreditGrade=="D")$avgCredit)
+#min: 609.5, max:629.5
+summary(subset(loans, ProsperRatingSystem=="Old Rating System" & 
+                 ProsperCreditGrade=="E")$avgCredit)
+#min: 549.5, max:589.5
+summary(subset(loans, ProsperRatingSystem=="Old Rating System" & 
+                 ProsperCreditGrade=="HR")$avgCredit)
+#min: 9.5, max:549.5
+```
+
+****
+
+Looking at this from another angle, I wonder what the mean credit score is for a given interest rate.
+
+```{r mean_and_median_score_by_rate, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+# g4 <- ggplot(data = loans, aes(x = round(BorrowerRate/5, digits = 3) * 5, 
+#                                y = avgCredit)) +
+#   geom_point() +
+#   scale_x_continuous(limits = c(quantile(loans$BorrowerRate,0.025), 
+#                                 quantile(loans$BorrowerRate,0.975))) + 
+#   geom_smooth()
+
+ggplot(data = loans, aes(x = BorrowerRate, y = avgCredit)) +
+  geom_point(alpha=1/20, position = position_jitter(h=25,w=0.02)) +
+  scale_x_continuous(limits = c(quantile(loans$BorrowerRate,0.025), 
+                                quantile(loans$BorrowerRate,0.975))) + 
+  scale_y_continuous(limits = c(quantile(loans$avgCredit,0.005, na.rm = T), 
+                                quantile(loans$avgCredit,0.975, na.rm = T))) +
+  geom_smooth() + labs(title="Mean Credit Score by Interest Rate")
+
+#grid.arrange(g4, g5, ncol = 1)
+
+# g6 <- ggplot(data = loans, aes(x = round(BorrowerRate/5, digits = 3) * 5, 
+#                                y = avgCredit)) + 
+#   geom_line(stat = 'summary', fun.y = median) +
+#   scale_x_continuous(limits = c(quantile(loans$BorrowerRate,0.025), 
+#                                 quantile(loans$BorrowerRate,0.975))) + 
+#   geom_smooth()
+
+# g7 <- ggplot(data = loans, aes(x = BorrowerRate, y = avgCredit)) +
+#   geom_point() +
+#   scale_x_continuous(limits = c(quantile(loans$BorrowerRate,0.025), 
+#                                 quantile(loans$BorrowerRate,0.975))) + 
+#   geom_smooth() + labs(title="Median Credit Score by Interest Rate")
+# 
+# grid.arrange(g5, g7, ncol = 1)
+
+```
+
+Consistent with the previous findings, those with higher credit scores qualify for better interest rates. This is by design and controlled by the website. It was interesting however to see an uptick in mean and median credit scores at the very high end of interest rates. I wonder if this is due to the fact that the higher interest rates are associated with either much larger original loan amounts or much longer terms that only better qualified borrowers would be approved for.
+
+Term Summary of Loans with Borrower Rate Greater Than or Equal to 0.29:
+```{r rate_summaries_1, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, BorrowerRate >= 0.29)$Term))
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#  36.00   36.00   36.00   37.87   36.00   60.00 
+```
+
+Term Summary of Loans with Borrower Rate Less Than 0.29:
+```{r rate_summaries_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, BorrowerRate < 0.29)$Term))
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#  12.00   36.00   36.00   41.34   36.00   60.00 
+```
+
+
+Original Loan Amount Summary of Loans with Borrower Rate Greater Than or Equal to 0.29:
+```{r rate_summaries_3, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, BorrowerRate >= 0.29)$LoanOriginalAmount))
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#   1000    2500    4000    3910    4000   25000 
+```
+
+Original Loan Amount Summary of Loans with Borrower Rate Less Than 0.29:
+```{r rate_summaries_4, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, BorrowerRate < 0.29)$LoanOriginalAmount))
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#  1000    4000    7500    9091   13500   35000 
+```
+
+
+Number of Loans with Borrower Rate between 0.275 and 0.3:
+```{r rate_summaries_5, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(sum(loans$BorrowerRate>=0.275  & loans$BorrowerRate<0.3))
+# 7452
+```
+
+Number of Loans with Borrower Rate Between 0.3 and 0.325:
+```{r rate_summaries_6, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(sum(loans$BorrowerRate>=0.3 & loans$BorrowerRate<0.325))
+# 9257
+```
+
+I was quite wrong in my estimate for the reason behind why the average credit score is higher for those borrowers of higher interest rate loans. I even surmised that the lack of relative volume of loans above 30% could be skewing the numbers, but there were even more loans with rates from 30-32.5% than from 27.5-30% interest.
+
+****
+
+```{r rate_investors, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x = round(BorrowerRate/5, digits = 3) *5, 
+                         y = Investors)) +
+  geom_point(alpha=1/30, position = position_jitter(w=.02)) + geom_smooth() + 
+  coord_cartesian(ylim = c(0,200), 
+                  xlim = c(quantile(loans$BorrowerRate, 0.025), 
+                           quantile(loans$BorrowerRate, 0.975)))
+
+```
+
+Correlation Coefficient of Investors and BorrowerRate:
+```{r rate_investors_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+pander(as.numeric(cor.test(loans$BorrowerRate, loans$Investors)$estimate))
+```
+
+Correlation Coefficient of Investors and BorrowerRate on loans with more than 1 investor:
+```{r rate_investors_stats_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+pander(as.numeric(cor.test(subset(loans, Investors>1)$BorrowerRate, 
+                           subset(loans, Investors>1)$Investors)$estimate))
+```
+
+As we have seen previously, a large number of loans with only one investor may be effecting the data. Here, the correlation between Investors and Borrower rate went up when excluding the nearly 25% of loans with only one investor. I am curious if this is true throughout the period of time covered by the dataset.
+
+****
+
+
+```{r investors_per_day_and_month, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+#Number of loans with one investor per month
+ggplot(data = subset(loans, Investors==1), 
+       aes(x=as.POSIXct(strptime(LoanOriginationDate, '%Y-%m-%d %H:%M:%S')))) + 
+  geom_histogram(binwidth = 60*60*24*30.4375, aes(fill = ..count..)) +
+  scale_y_sqrt(breaks = c(50,100,250,500,750,1000,1500,2000,3000,4000)) +
+  ggtitle("Number of loans with one investor, per month")
+
+#Median Investors per day
+ggplot(data = loans, 
+       aes(x=as.POSIXct(strptime(LoanOriginationDate, '%Y-%m-%d %H:%M:%S')), 
+           y = Investors)) + 
+  geom_line(stat = "summary", fun.y = median) + geom_smooth() +
+  ggtitle("Median and Mean investors per day")
+```
+
+An explosion of One-Investor loans occurs in early 2013 and I wonder why. To see it reach levels of over 4000 loans per month when the previous high was just over 200, is shocking to say the least. I want to see if we can investigate investor behavior further by looking at investor relationships with other variables.
+
+****
+
+```{r credit_investors_dot_box, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x = avgCredit, y = Investors)) +
+  scale_x_continuous(limits = c(520, 838),
+                     breaks = seq(530,830,20)) + 
+  geom_point(alpha=1/20, position = position_jitter(h=1)) + 
+  scale_y_sqrt(limits = c(quantile(loans$Investors, 0.025, na.rm = T), 
+                                quantile(loans$Investors, 0.975, na.rm = T)),
+               breaks = c(1,5,10,25,50,75,100,200,300,400)) + 
+  geom_boxplot(aes(color=as.factor(avgCredit), alpha=1/4)) +
+  guides(color=FALSE, alpha=FALSE)
+```
+
+Correlation Coefficient of Investors and avgCredit:
+```{r credit_investors_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$avgCredit, loans$Investors)$estimate))
+```
+
+While the plot suggests some relationship, Investors per loan is not very highly correlated with credit score. My guess on why the plot looks to have a stronger relationship is due to the high number of one investor loans in the 650-750 credit score range.
+
+****
+
+```{r d2ir_investors_dot_line, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x = DebtToIncomeRatio, y = Investors)) +
+  geom_point(alpha = 1/15, position = position_jitter(h=0, w=0.7)) + 
+  scale_x_sqrt(breaks = seq(0,1.5,0.1), limits = c(0,1.7)) + 
+  scale_y_continuous(limits = c(quantile(loans$Investors, 0.025), 
+                                quantile(loans$Investors, 0.975))) + 
+  geom_smooth()
+```
+
+Correlation Coefficient of Investors and DebtToIncomeRatio:
+```{r credit_d2ir_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$DebtToIncomeRatio, loans$Investors)$estimate))
+```
+
+```{r original_investors_line, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = round(LoanOriginalAmount/1000) * 1000, 
+                         y = Investors)) + 
+  geom_line(stat = "summary", fun.y = mean) + geom_smooth()
+```
+
+Correlation Coefficient of Investors and LoanOriginalAmount:
+```{r credit_original_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$LoanOriginalAmount, 
+                           loans$Investors)$estimate))
+```
+
+Investors do not seem to factor Debt to Income ratio into investment decisions at all, with a correlation that low. It does however seem that higher loan amounts are likely to attract a higher number of investors. I suspect that this is due to investors wanting to spread the risk of default.
+
+****
+
+####The following plots will be faceted for the purpose of separating the data only, rather than for comparing the data among the faceted variable.
+
+```{r creditlines_credit_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = TotalCreditLinespast7years, y = avgCredit)) +
+  geom_line(stat = "summary", fun.y = mean) + facet_wrap(~CreditSystem) + 
+  geom_smooth() +
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 0.975, na.rm = T)))
+```
+
+Correlation Coefficient of avgCredit and TotalCreditLinespast7years:
+```{r creditlines_credit_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$avgCredit, 
+                           loans$TotalCreditLinespast7years)$estimate))
+```
+
+```{r inquires_credit_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+ggplot(data = loans, aes(x = InquiriesLast6Months, y = avgCredit)) +
+  geom_line(stat = "summary", fun.y = mean) + facet_wrap(~CreditSystem) + 
+  geom_smooth() +
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 0.975, na.rm = T))) + 
+  scale_x_log10((limits = 
+                   c(quantile(loans$InquiriesLast6Months, 0.025, na.rm = T), 
+                     quantile(loans$InquiriesLast6Months, 0.9, na.rm = T))))
+
+
+```
+
+Correlation Coefficient of avgCredit and InquiriesLast6Months:
+```{r inquiries_credit_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$avgCredit, 
+                           loans$InquiriesLast6Months)$estimate))
+```
+
+It would seem that credit inquiries in the last 6 months or total credit lines in the last 7 years are not significant factors in determining credit score.
+
+****
+
+Delinquencies Summary:
+```{r delinquencies_credit_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+pander(summary(loans$DelinquenciesLast7Years))
+```
+
+
+```{r delinquencies_credit_box, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+
+#Delinquencies vs credit
+ggplot(data = subset(loans, !is.na(DelinquenciesLast7Years)), 
+       aes(x = as.factor(round(DelinquenciesLast7Years/2)*2), y = avgCredit)) + 
+  geom_boxplot() +
+  coord_cartesian(ylim = c(550,750)) +
+  scale_x_discrete(breaks = seq(0,100,10))
+```
+
+Number of borrowers with zero delinquencies in the last 7 years:
+```{r interesting_delinquencies_stat_1, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(length(subset(loans, 
+                     DelinquenciesLast7Years==0)$DelinquenciesLast7Years))
+```
+
+Number of borrowers with at least one delinquency in the last 7 years:
+```{r interesting_delinquencies_stat_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(length(subset(loans, 
+                     DelinquenciesLast7Years>0)$DelinquenciesLast7Years))
+```
+
+Percentage of borrowers with Zero or One delinquency in the last seven years:
+```{r delinquencies_credit_stats_1, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander((nrow(subset(loans, DelinquenciesLast7Years<=1))/nrow(loans))*100)
+
+```
+%
+
+It is interesting to see that those borrowers with only zero or one delinquency in 7 years (which make up the majority of the dataset) have a measurably higher average credit score than those with more delinquencies. Borrowers with 3-50 delinquencies have approximately the same median credit score and borrowers with approximately 50-80 delinquencies in the last seven years generally have the same median credit score. This suggests that credit rating agencies group people when factoring this statistic into credit scores.
+
+****
+
+```{r delinquencies_credit_point_line, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x = DelinquenciesLast7Years, y = avgCredit)) +
+  geom_point(alpha =1/30, position = position_jitter(h = 25, w = 1.2)) +
+  scale_x_sqrt(limits = c(-0.1,35), breaks = c(0,1,2,3,4,5,6,7,8,9,10,20,30)) +
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 0.975, na.rm = T))) +
+  geom_smooth()
+
+ggplot(data = loans, aes(x = DelinquenciesLast7Years, y = avgCredit)) +
+  geom_line(stat = "summary", fun.y = mean) + geom_smooth() +
+  facet_wrap(~CreditSystem)
+```
+
+Correlation Coefficient of avgCredit and DelinquenciesLast7Years with "ScoreX":
+```{r delinquencies_credit_stats_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+
+pander(as.numeric(cor.test(subset(loans, CreditSystem=="ScoreX")$avgCredit, 
+         subset(loans, 
+                CreditSystem=="ScoreX")$DelinquenciesLast7Years)$estimate))
+
+```
+
+Correlation Coefficient of avgCredit and DelinquenciesLast7Years with "FICO08":
+```{r delinquencies_credit_stats_3, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+pander(as.numeric(cor.test(subset(loans, CreditSystem=="FICO08")$avgCredit, 
+         subset(loans, 
+                CreditSystem=="FICO08")$DelinquenciesLast7Years)$estimate))
+```
+
+While there appears to be a downward trend in average credit score as delinquencies go up, the two variables are not highly correlated enough to assume causation. The biggest difference in these numbers is between those with zero or one delinquency and all others.
+
+****
+
+```{r opencredit_credit_line, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = OpenCreditLines, y = avgCredit)) +
+  geom_line(stat = "summary", fun.y = mean) + geom_smooth()
+```
+
+OpenCreditLines Summary:
+```{r opencredit_credit_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(loans$OpenCreditLines))
+```
+
+The most notable feature of the plot above is that those borrowers with very few open lines of credit actually have lower average credit scores, suggesting that some debt is actually good. I wonder if each credit scoring system treats open credit lines the same.
+
+```{r opencredit_credit_system_facet, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = as.factor(OpenCreditLines), y = avgCredit)) +
+  geom_boxplot() + coord_cartesian(xlim = c(0,13), ylim = c(500,800)) +
+  facet_wrap(~CreditSystem, ncol = 1)
+```
+
+Interestingly, the two systems differ slightly when it comes to open credit lines. While ScoreX slightly rewards those with more open credit lines than fewer, FICO08 shows slightly lower average credit scores for those borrowers with 3-5 open credit lines as compared to both those with none and 6+ alike.
+
+****
+
+```{r openrevolving_credit_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = OpenRevolvingAccounts, y = avgCredit)) +
+  geom_line(stat = "summary", fun.y = mean) + geom_smooth()
+```
+
+OpenRevolvingAccounts Summary:
+```{r openrevolving_credit_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(loans$OpenRevolvingAccounts))
+
+ggplot(data = loans, aes(x = as.factor(OpenRevolvingAccounts), 
+                         y = avgCredit)) +
+  geom_boxplot() + coord_cartesian(xlim = c(0,10), ylim = c(500,800)) +
+  facet_wrap(~CreditSystem, ncol = 1)
+
+```
+
+OpenRevolvingAccounts effect on credit score is very similar to that of OpenCreditLines, which makes sense as revolving accounts are likely included in all credit lines. Oddly though, we don't see a similar effect on credit score with revolving accounts under FICO08 as we did with all credit lines. It appears that under this calculation, the number of open revolving accounts is not factored into the credit score much if at all.
+
+****
+
+```{r revolvingmonthly_credit_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x= OpenRevolvingMonthlyPayment, y = avgCredit)) +
+  geom_point(alpha = 1/20, position = position_jitter()) + 
+  scale_x_continuous(limits = c(quantile(loans$OpenRevolvingMonthlyPayment, 
+                                         0.005, na.rm = T), 
+                                quantile(loans$OpenRevolvingMonthlyPayment, 
+                                         0.995, na.rm = T))) + 
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 0.975, 
+                                         na.rm = T))) + 
+  facet_wrap(~CreditSystem, ncol = 1) + geom_smooth()
+```
+
+Correlation Coefficient of OpenRevolvingMonthlyPayment and RevolvingCreditBalance:
+```{r revolvingmonthly_balance_cor, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$OpenRevolvingMonthlyPayment, 
+                           loans$RevolvingCreditBalance)$estimate))
+```
+
+As expected, OpenRevolvingMonthlyPayment and RevolvingCreditBalance are highly correlated, with much of the variance having to do with interest rate and how the debt is spread among open accounts.
+
+****
+
+```{r cardutilization_credit_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = BankcardUtilization, y = avgCredit)) +
+  geom_point(alpha = 1/20, position = position_jitter()) + geom_smooth() +
+  scale_x_continuous(limits = c(quantile(loans$BankcardUtilization, 
+                                         0.025, na.rm = T), 
+                                quantile(loans$BankcardUtilization, 
+                                         0.975, na.rm = T))) + 
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 
+                                         0.975, na.rm = T))) + 
+  facet_wrap(~CreditSystem, ncol = 1)
+```
+
+Correlation Coefficient of BankcardUtilization and AvailableBankcardCredit:
+```{r cardutilization_stats_1, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$BankcardUtilization, 
+                           loans$AvailableBankcardCredit)$estimate))
+```
+
+Correlation Coefficient of OpenRevolvingMonthlyPayment and BankcardUtilization:
+```{r cardutilization_stats_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$OpenRevolvingMonthlyPayment, 
+                           loans$BankcardUtilization)$estimate))
+```
+
+```{r availablecredit_credit_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = AvailableBankcardCredit, y = avgCredit)) +
+  geom_point(alpha = 1/20, position = position_jitter()) + geom_smooth() +
+  scale_x_continuous(limits = c(quantile(loans$AvailableBankcardCredit, 
+                                         0.025, na.rm = T), 
+                                quantile(loans$AvailableBankcardCredit, 
+                                         0.975, na.rm = T))) +
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 
+                                         0.975, na.rm = T))) + 
+  
+  facet_wrap(~CreditSystem, ncol = 1)
+```
+
+Having some available credit is better than none, but there are diminishing returns after $10,000-$20,000 of available credit.
+
+```{r d2ir_credit_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = round((DebtToIncomeRatio/4), digits = 2) * 4, 
+                         y=avgCredit)) +
+  geom_line(stat = "summary", fun.y = mean) +
+  scale_x_sqrt(limits = c(quantile(loans$DebtToIncomeRatio, 0.025, na.rm = T), 
+                          quantile(loans$DebtToIncomeRatio, 0.975, na.rm = T)), 
+               breaks = seq(0,1,0.1)) + 
+  facet_wrap(~ CreditSystem, ncol = 1) + geom_smooth()
+
+```
+
+When comparing many of the credit metrics to credit score, it would appear once again that some debt is good. The global peak (or at least local peak) credit score is often around the first quartile of many of the metrics, such as OpenRevolvingMonthlyPayment, OpenRevolvingMonthlyPayment, OpenRevolvingAccounts, Bankcardutilization and DebtToIncomeRatio. While the faceting above was simply intended to account for the fact that each system derived scores slightly differently, some really interesting differences were shown. Each model seems to factor Debt To Income Ratio and Open Credit Accounts very differently.
+
+****
+
+```{r bankcard_available_plot, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(y = BankcardUtilization, 
+                         x = AvailableBankcardCredit, dig.lab = 6)) + 
+  geom_point(alpha = 1/20, position = position_jitter()) +
+  scale_x_sqrt(limits = c(0, quantile(loans$AvailableBankcardCredit, 
+                                         0.975, na.rm = T))) +
+  scale_y_continuous(limits = c(0, quantile(loans$BankcardUtilization, 
+                                            0.975, na.rm = T))) +
+  geom_smooth()
+```
+
+Correlation Coefficient of AvailableBankcardCredit and BankcardUtilization:
+```{r bankcard_available_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$AvailableBankcardCredit, 
+                           loans$BankcardUtilization)$estimate))
+```
+
+Sadly, given that other variables have an effect on the plot above, I struggled to find anything meaningful or interesting.
+
+****
+
+```{r bankcard_delinquencies_box, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, !is.na(DelinquenciesLast7Years)), 
+                     aes(y = BankcardUtilization, 
+                         x = as.factor(round(DelinquenciesLast7Years/4)*4))) + 
+  geom_boxplot() + 
+  coord_cartesian(ylim = c(0,1)) +
+  scale_x_discrete(breaks = seq(0,100,10))
+```
+
+Correlation Coefficient of AvailableBankcardCredit and BankcardUtilization:
+```{r bankcard_delinquencies_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(as.numeric(cor.test(loans$DelinquenciesLast7Years, 
+                           loans$BankcardUtilization)$estimate))
+```
+
+While I would have expected those with more delinquencies to have higher Bankcard Utilization (both indicators of poor credit management), it seems that the two variables are not related.
+
+****
+
+```{r interesting_delinquencies, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+ggplot(data = subset(loans, DelinquenciesLast7Years>0) , 
+       aes(x=IsBorrowerHomeowner, y=DelinquenciesLast7Years)) +
+  geom_boxplot() + coord_cartesian(ylim = c(2,18)) +
+  scale_y_continuous(breaks = seq(2,18,2))
+```
+
+I expected homeowners to have more delinquencies as they likely have a larger debt burden than most non-homeowners, but they indeed have less. This is a more nuanced discussion however. Are those with higher delinquencies less likely to own a home due to poorer credit management? Does owning a home condition a person to pay bills on time? This definitely requires more investigation.
+
+****
+
+Correlation Coefficient of avgCredit and DelinquenciesLast7Years:
+```{r interesting_delinquencies_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+pander(as.numeric(cor.test(loans$avgCredit, 
+                           loans$DelinquenciesLast7Years)$estimate))
+
+#Delinquencies per credit rating
+ggplot(data = loans, aes(x=ProsperCreditGrade, y=DelinquenciesLast7Years)) +
+  geom_boxplot() + 
+  scale_y_sqrt(limits = c(quantile(loans$DelinquenciesLast7Years, 
+                                   0.025, na.rm = T), 
+                          quantile(loans$DelinquenciesLast7Years, 
+                                   0.975, na.rm = T)))
+```
+
+Delinquencies and average credit score are not highly correlated and after plotting delinquencies by Prosper Credit Grade, I see why. Because of the number of borrowers with zero delinquencies in the last 7 years, the median number of delinquencies across all grades is zero, which skews any potential correlation. The clear difference we see is in the third quartiles of the poorer credit grades.
+
+****
+
+```{r interesting_delinquencies_3, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+#How many non-revolving lines of credit 
+#among those with at least one delinquency
+ggplot(data=subset(loans, OpenCreditLines>0 & !is.na(OpenCreditLines) & 
+                     !is.na(OpenRevolvingAccounts) & 
+                     DelinquenciesLast7Years>0), 
+       aes(x=DelinquenciesLast7Years, 
+           y=(OpenCreditLines-OpenRevolvingAccounts))) + 
+  geom_smooth() + 
+  scale_x_continuous(limits = c(1, quantile(loans$DelinquenciesLast7Years, 
+                                            0.975, na.rm = T)), 
+                     breaks = seq(1,35,1)) +
+  ylab("Open Non-Revolving Lines of Credit")
+```
+
+While delinquencies are not highly correlated with credit score, it does seem to be something that is factored into human decisions about credit viability. There is a clear decline in average number of open non-revolving lines of credit as delinquencies increase. As non-revolving lines of credit are typically approved by an underwriter who would look at more factors than just a credit score, it is reasonable to infer that this decline we see is deliberate.
+
+****
+
+```{r interesting_delinquencies_4, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+
+#Investors per number of delinquencies
+ggplot(data = loans, 
+       aes(x = as.numeric(DelinquenciesLast7Years), y = Investors)) + 
+  geom_smooth() + scale_x_continuous(limits = c(0,40))
+
+```
+
+Similarly, we see that less Investors are likely to invest in a single loan if the borrower has a higher number of delinquencies.
+
+****
+
+
+##Bivariate Analysis
+
+###Talk about some of the relationships you observed in this part of the investigation. How did the feature(s) of interest vary with other features in the dataset?
+The analysis revealed two major shifts in the dataset that had an effect on a number of the variables throughout. First, in 2009 Prosper changed its proprietary, letter-based credit rating system. Under it's old system, each letter grade was almost equally likely to have been assigned, with the most frequent grades being "B", "C" and "D". Under the new system, the distribution is more normal and while "C" is still the most frequently assigned grade, the highest and lowest grades "AA" and "HR" were much assigned much less frequently than all other grades.
+
+Second, in 2013 Propser migrated it's source of credit scores from Experian ScoreX to the more widely used FICO08. The credit scores in each source are calculated in very different ways, so it is almost impossible to conduct any analysis on scores among the entire dataset, without separating by which source was used to create the score. The dataset placed borrowers into groups by credit score and while the groups in each source were generally 20 points apart, the old source gave scores all the way from 0 to 899 but the new source gave scores from 640 to 859. It is highly unlikely that prosper simply decided to limit borrowers by that credit score range after the switch, so we can assume that it is just a fundamentally different rating system.
+
+The original Prosper grading system appears to have relied heavily on credit score. Under the new rating system, borrowers with higher credit scores generally have higher Prosper grades, but the system seems to be much more nuanced, factoring other variables and not just credit score. Regardless of rating system, borrowers with higher grades garner more investors per loan, on average.
+
+A loan's amount and term do not appear to have an appreciable effect on the loan's interest rate. Debt-to-income ratio seems to be factored in slightly, but Credit Score and Prosper Credit Grade are the highest correlated with interest rate. While those with lower credit scores generally have higher interest rate loans, the average credit score among those with the highest interest rate loans (>30%) is actually slightly higher than those with lower interest rate loans around 30%.
+
+Credit scores are likely calculated using many of the "credit history" and "credit health" variables that exist in this dataset, but outside of OpenRevolvingMonthlyPayment, I was unable to find many strong correlations. However, I did notice an interesting phenomena when comparing many of the variables to credit score, where a local maximum would present itself around the first quartile of the variable. These variables are all indicators of current debt or credit utilization, suggesting that carrying a small amount of debt may actually lead to slightly higher credit scores than would be expected.
+
+Finally, while I faceted some of the plots above by Credit Score Source in order to more accurately analyze a particular variable's effect on the score, some interesting differences in the models was shown. For instance, each model seems to factor Debt To Income Ratio and Open Credit Accounts very differently
+
+###Did you observe any interesting relationships between the other features (not the main feature(s) of interest)?
+I was fascinated that nearly 1/3 of borrowers in the dataset had at least one delinquency in the last 7 years. Among those with at least one, the average number of open non-revolving credit lines declines as the number of delinquencies in the last 7 years goes up. While this may be due to better credit management, my guess is that those with a greater number of delinquencies are less likely to be approved for a non-revolving line of credit. This theory can be defended by looking at the number of investors per loan compared to number of delinquencies. Those borrowers with less than five delinquencies are much more likely to receive a higher number of investors than those with more than five.
+
+On the topic of investors, it was also interesting to see the median investors per loan over time. There appears to have been a huge shift in early 2013 driving down median investors per loan to as low as 1 in 2014. This is confirmed when we look at the number of "One Investor Loans" per month and see massive increases in 2013 and 2013.
+
+###What was the strongest relationship you found?
+By far, the strongest relationship I found was that of Credit Scores and Prosper Credit Grade with the old rating system. With a correlation coefficient of -0.98, it is very likely that the rating system was simply an aggregation of a group borrowers based on credit score alone. In fact, there are only two instances where a credit grade's minimum credit score matches that of the lower grade's maximum.
+
+****
+
+
+##Multivariate Plots
+
+
+```{r investors_by_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x=ProsperCreditGrade, 
+                         y=Investors, fill = ProsperCreditGrade)) +
+  geom_boxplot() + facet_wrap(~ CreditSystem) +
+  scale_y_log10(limits = c(quantile(loans$Investors, 0.005), 
+                           quantile(loans$Investors, 0.995)))
+```
+
+Looking at this plot alone, it is easy to be confused as to why the distributions are so different between the two credit scoring systems. What caused investor behavior to change so much after the change to FICO08?
+
+Investor Summary for "ScoreX" Loans:
+```{r investors_stats_1, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, loans$CreditSystem=="ScoreX")$Investors))
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#   1.00   24.00   62.00   96.94  135.00 1189.00 
+```
+
+Investor Summary for "FICO08" Loans:
+```{r investors_stats_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, loans$CreditSystem=="FICO08")$Investors))
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#   1.0     1.0     1.0    31.8     7.0   714.0 
+```
+
+Investors per Day in the "ScoreX" Era:
+```{r investors_stats_3, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+#Daily Investors in the ScoreX era
+pander(sum(subset(loans, CreditSystem=="ScoreX")$Investors) / 
+  as.numeric((ymd("2013-09-07")-ymd("2005-11-09"))))
+# 2878.554
+```
+
+Investors per Day in the "FICO08" Era:
+```{r investors_stats_4, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+#Daily Investors in the FICO08 era
+pander(sum(subset(loans, CreditSystem=="FICO08")$Investors) / 
+  as.numeric((ymd("2014-03-10")-ymd("2013-09-07"))))
+# 4972.37
+```
+
+As we have seen previously, there was a massive explosion of one investor loans in early to mid-2013. The switch to FICO08 occurred in late 2013, so it is unlikely to be the cause of the major shift in investor behavior. Further skewing the plot is the fact that the site saw much greater activity in the FICO08 era than before the change. It is no wonder we see such a disparity in the median and mean investors per loan during this time. 
+
+****
+
+```{r investors_credit_score_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, !is.na(avgCredit) & avgCredit > 640), 
+       aes(x=as.factor(avgCredit), y=Investors, 
+           fill = as.factor(avgCredit))) + 
+  geom_boxplot() + facet_wrap(~ CreditSystem) +
+  scale_y_log10(limits = c(quantile(loans$Investors, 0.005), 
+                           quantile(loans$Investors, 0.995))) +
+  theme(axis.text.x=element_text(angle = 30)) +
+  guides(fill=FALSE)
+```
+
+Consistently, we see that nearly every median investors per loan by credit score is one. Given the differences we've seen between the median and mean, I am curious to see what the distribution of means by credit score would look like.
+
+****
+
+```{r investors_mean_credit_score_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, !is.na(avgCredit) & avgCredit > 640), 
+       aes(x = avgCredit, y = Investors)) +
+  geom_smooth() + facet_wrap(~ CreditSystem)
+```
+
+We do again see that mean investors per loan is down in the FICO08 era as compared with the ScoreX era. However, it is good to see a definitive increase in mean investors per loan as credit scores go up. This is to be expected and likely due to higher investor confidence.
+
+Percentage of borrowers with a credit score above 825:
+```{r investors_credit_score_stats, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander((nrow(subset(loans, avgCredit>=825))/nrow(loans))*100)
+```
+%
+
+With such a low percentage of borrowers with a credit score above 825, it is likely that the decline we see in the plot above is either related to some anomaly in the data or a regression to a more appropriate level of investors per loan.
+
+****
+
+```{r bucket_apr_term, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+loans$originalBucket <- 
+  cut(loans$LoanOriginalAmount, c(0, 3500, 6000, 11500, 35001), dig.lab = 6)
+
+```
+
+
+Loans Per Term:
+```{r bucket_apr_term_box, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+pander(table(loans$Term))
+
+ggplot(data = loans, aes(x = originalBucket, y = BorrowerAPR)) +
+  geom_boxplot() + facet_wrap(~Term) + 
+  scale_x_discrete(labels = c("$0-3,500", "$3,500-6,000", "$6000-11,500", 
+                              "$11,500-35,000")) +
+  theme(axis.text.x = element_text(angle = 15, vjust = 0.75, 
+                                   color = "black")) +
+  xlab("Original Loan Amount") +
+  coord_cartesian(ylim = c(0.1, 0.35))
+  
+
+```
+
+Faceting the loans by term, we see that loan amounts from $3500-6000 command the highest interest rates in their group, with slightly higher and slightly lower loan amounts commanding lower rates. Variability in interest rates per original loan amount seems to vary by term as well, even though some of the median rates in each original loan group do not seem to follow a pattern term to term.
+
+****
+
+```{r original_monthly_apr_trim, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, loans$MonthlyLoanPayment > 0), 
+       aes(x = LoanOriginalAmount, y = MonthlyLoanPayment)) + 
+  geom_point(aes(color = BorrowerAPR), alpha = 0.7, 
+             position = position_jitter()) +
+  facet_wrap(~ Term) + 
+  scale_y_continuous(limits = c(quantile(loans$MonthlyLoanPayment, 0.01), 
+                                quantile(loans$MonthlyLoanPayment, 0.99))) +
+  scale_x_continuous(limits = c(quantile(loans$LoanOriginalAmount, 0.01), 
+                                quantile(loans$LoanOriginalAmount, 0.99)))
+```
+
+We would expect to see a good deal of linearity when comparing Loan Amount to Monthly Payment. Obviously the majority of the variance in this case is due to the interest rate. The 36 month loans do seem to have a higher variance than the other loans, so it will be interesting to see if this holds true.
+
+12 Month Loan APR Variance:
+```{r term_apr_variance_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(var(subset(loans, Term==12 & !is.na(BorrowerAPR))$BorrowerAPR))
+```
+
+12 Month Loan APR Summary:
+```{r term_apr_variance_3, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, Term==12 & !is.na(BorrowerAPR))$BorrowerAPR))
+```
+
+36 Month Loan APR Variance:
+```{r term_apr_variance_4, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(var(subset(loans, Term==36 & !is.na(BorrowerAPR))$BorrowerAPR))
+```
+
+36 Month Loan APR Summary:
+```{r term_apr_variance_5, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, Term==36 & !is.na(BorrowerAPR))$BorrowerAPR))
+```
+
+60 Month Loan APR Variance:
+```{r term_apr_variance_7, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(var(subset(loans, Term==60 & !is.na(BorrowerAPR))$BorrowerAPR))
+```
+
+60 Month Loan APR Summary:
+```{r term_apr_variance_8, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, Term==60 & !is.na(BorrowerAPR))$BorrowerAPR))
+```
+
+Surprisingly, 12 month loans had greater variability than 36 or 60 month loans.
+
+****
+
+```{r original_monthly_prosper_trim, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, loans$MonthlyLoanPayment > 0), 
+       aes(x = LoanOriginalAmount, y = MonthlyLoanPayment)) + 
+  geom_point(aes(color = ProsperCreditGrade), alpha = 1/3) +
+  facet_wrap(~ Term) +
+  scale_y_sqrt(limits = c(quantile(loans$MonthlyLoanPayment, 0.01), 
+                          quantile(loans$MonthlyLoanPayment, 0.99))) +
+  scale_x_continuous(limits = c(quantile(loans$LoanOriginalAmount, 0.01), 
+                                quantile(loans$LoanOriginalAmount, 0.99))) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1)))
+
+```
+
+Given that we know how correlated interest rate and Prosper Credit Grade are, it is not surprising to see how similar these plots appear. This plot however gives a clearer view of the separation between the groups of borrowers on the 36 and 60 month loans.
+
+****
+
+```{r opencredit_d2ir_credit_homeowner_tables, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE , eval=FALSE}
+
+table(loans$ListingCategory..numeric.)
+table(loans$DebtToIncomeRatio)
+table(loans$DelinquenciesLast7Years)
+table(loans$OpenRevolvingMonthlyPayment)
+table(loans$OpenCreditLines)
+```
+
+Among Debt Consolidation Borrowers, What is the Relationship Between Open Credit Lines and Debt to Income Ratio?
+```{r opencredit_d2ir_credit_homeowner, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+#Among Debt Consolidation Borrowers, What is the Relationship Between Open Credit Lines and Debt to Income Ratio
+
+ggplot(data = subset(loans, loans$ListingCategory..numeric.==1), 
+       aes(x = OpenCreditLines , y = DebtToIncomeRatio)) +
+  geom_point(aes(color = avgCredit), position = position_jitter(), 
+             alpha = 1/10) + facet_wrap(~ IsBorrowerHomeowner) +
+  scale_y_continuous(limits = 
+                       c(quantile(loans$DebtToIncomeRatio, 0.025, na.rm = T), 
+                         quantile(loans$DebtToIncomeRatio, 
+                                  0.975, na.rm = T))) +
+  scale_x_continuous(limits = c(quantile(loans$OpenCreditLines, 
+                                         0.025, na.rm = T), 
+                                quantile(loans$OpenCreditLines, 
+                                         0.975, na.rm = T))) +
+  scale_colour_gradient()
+```
+
+I would expect that as Open Credit Lines increases, so too will Debt to Income Ratio. However, even with jittering and changing the alpha level of the points, I don't feel that this plot gives us an idea of the relationship between the two. My sense is that a boxplot would do a better job of this.
+
+```{r opencredit_d2ir_credit_homeowner_box, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+
+ggplot(data = subset(loans, loans$ListingCategory..numeric.==1), 
+       aes(x = as.factor(round(OpenCreditLines/2)*2) , 
+           y = DebtToIncomeRatio)) +
+  geom_boxplot(aes(fill = as.factor(round(OpenCreditLines/2)*2)), 
+               show.legend = F) + 
+  scale_y_continuous(limits = c(0,
+                                quantile(loans$DebtToIncomeRatio, 
+                                         0.975, na.rm = T))) +
+  coord_cartesian(xlim = c(0,11), ylim = c(0,0.4)) +
+  facet_wrap(~ IsBorrowerHomeowner) +
+  scale_x_discrete(labels = c("0-1", "2-3", "4-5", "6-7", "8-9", "10-11", 
+                              "12-13", "14-15", "16-17", "18-19", "20-21")) +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.75, color = "black"))
+```
+
+With this plot we can see that non-homeowners generally have higher debt to income ratio per open credit line than homeowners.
+
+****
+
+Correlation Coefficient of MonthlyLoanPayment and BorrowerAPR:
+```{r monthlypayment_apr_cor, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+pander(as.numeric(cor.test(loans$MonthlyLoanPayment, 
+                           loans$BorrowerAPR)$estimate))
+```
+
+```{r monthlypayment_apr_bucket_prosper, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+
+ggplot(data = loans, aes(x = MonthlyLoanPayment, y = BorrowerAPR)) +
+  geom_point(aes(color = originalBucket), alpha = 1/10) + 
+  facet_wrap(~ProsperCreditGrade) +
+  scale_x_continuous(limits = c(quantile(loans$MonthlyLoanPayment, 0.025), 
+                                quantile(loans$MonthlyLoanPayment, 0.975))) + 
+  guides(colour = guide_legend(override.aes = list(alpha = 1)))
+
+# ggsave("APR vs Monthly Payment - Faceted by CreditGrade and Colored by Original Loan Amonut.png")
+```
+
+Given how integral a loan's interest rate is to it's monthly payment, I would have expected a higher correlation between the two. Obviously a loan's term and original amount are much bigger factors in the calculation of a monthly payment. The plot above has some really interesting discreteness that shows what we would expect, which is lines representing common original loan amounts moving in the plot as the interest rate affects the ultimate monthly payment. The most interesting thing to me however is how the pitch and variability of these lines change with each Prosper Credit Grade group and as the loan amount increases. First, there is generally much less variability in potential interest rates among higher graded borrowers. The lowest graded group has interest rates ranging from 5% to over 40%, though they are much less likely to be approved for higher loan amounts. Next, in each Prosper Credit Grade facet, we see that the pitch of the discrete lines sharpens as the original loan amount increases. This is because increases in the interest rate will cause larger increases in monthly payments for larger loans. This is not surprising, but still interesting to see plotted. 
+
+****
+
+```{r d2ir_credit_prosper_systems, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+
+ggplot(data = loans, aes(x = round((DebtToIncomeRatio/40), 
+                                   digits = 3) * 40, y=avgCredit)) +
+  geom_line(stat = "summary", fun.y = mean, aes(color = ProsperCreditGrade)) +
+  scale_x_sqrt(limits = c(quantile(loans$DebtToIncomeRatio, 0.01, na.rm = T), 
+                           quantile(loans$DebtToIncomeRatio, 
+                                    0.99, na.rm = T)), 
+                breaks = seq(0.1,1,0.2)) +
+  facet_wrap(~ CreditSystem+ProsperRatingSystem) + geom_smooth()
+
+```
+
+There are a few interesting things to look at in this plot. First, we see visually the difference in average credit score assigned to each Prosper Credit Grade under the old and newer rating systems. Given what we know about the differences in scores issued under ScoreX and FICO08, I would have expected to see a much bigger difference between the two under the same Prosper Grading system. Next while it does not seem that debt to income ratio was factored heavily into credit under ScoreX, we see some odd trends in the FICO08 data. The credit scores of the top three highest graded groups seem to increase with a modest amount of credit utilization, however drop sharply above 50% debt to income ratio. The scores of lower graded borrowers ("E" and "HR") however, see more consistent improvements to credit score with increases in credit utilization, which is counter-intuitive. 
+
+****
+
+```{r apr_investors_term, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x = BorrowerAPR, y = Investors)) +
+  geom_smooth() + facet_wrap(~Term)
+```
+
+I wonder if we will see different results when splitting this by loan amount.
+
+```{r rate_investors_term_original, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x = BorrowerRate, y = Investors, 
+                         color = originalBucket)) + 
+  geom_smooth() + facet_wrap(~Term) +
+  coord_cartesian(ylim = c(0,300), 
+                  xlim = c(quantile(loans$BorrowerRate, 0.025), 
+                           quantile(loans$BorrowerRate, 0.975)))
+```
+
+Given that investors make money on the interest of loans, I would have expected to see more investors per loan as interest rates increased. That we essentially see the opposite on loans with an interest rate above 10% is indicative of the fact that higher risk borrowers receive higher interest loans, which make them less desirable to investors.
+
+****
+
+```{r rate_credit_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, !is.na(loans$avgCredit)), 
+       aes(x = as.factor(avgCredit), y = BorrowerRate, 
+           fill = as.factor(avgCredit))) +
+  geom_boxplot() + scale_x_discrete(limits = seq(649.5, 809.5, 20)) +
+  facet_wrap(~CreditSystem, ncol=1) + coord_flip() +
+  guides(fill = guide_legend(reverse = TRUE))
+```
+
+In all instances except the lowest credit score range, the new credit score source meant lower mean interest rates and less variability within each score group. Given we know that the scores from each of these systems are calculated very differently and have a different range of possibilities, I believe that the variance we see is due to different populations occupying the score ranges, rather than the new system being used by Prosper to issue lower interest rates for the same credit score range.
+
+****
+
+```{r original_credit_propser_systems, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, avgCredit>=549.5 & avgCredit<=829.5), 
+       aes(x = as.factor(avgCredit), y = LoanOriginalAmount)) + 
+  geom_boxplot() + 
+  facet_wrap(~ProsperRatingSystem + CreditSystem) + 
+  coord_cartesian(ylim = c(2000,19000)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.75, color = "black"))
+```
+
+Correlation Coefficient of avgCredit and LoanOriginalAmount:
+```{r avgcredit_original_cor, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+pander(as.numeric(cor.test(loans$avgCredit, 
+                           loans$LoanOriginalAmount)$estimate))
+```
+
+A borrowers credit score obviously does not dictate the size of the loan they receive, but it does appear that borrowers with higher credit scores are afforded the opportunity to receive a wider range of loan amounts than borrowers with lower scores. For example, the median loan for borrowers with a credit score lower than 630 was less than $4,000. Whereas borrowers with higher credit scores received median loans as high as $15,000. The variance around this median generally increases with credit score.
+
+****
+
+
+```{r prosper_rate_dot_smooth, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, ProsperRatingSystem=="New Rating System" &
+                     !is.na(avgCredit)), 
+       aes(x = BorrowerRate, y = avgCredit)) + 
+  geom_point(alpha = 1/4, position = position_jitter()) +
+  scale_x_continuous(limits = c(quantile(loans$BorrowerRate,0.025), 
+                                quantile(loans$BorrowerRate,0.975))) +
+  scale_y_continuous(limits = c(quantile(loans$avgCredit,0.025, na.rm = T), 
+                                quantile(loans$avgCredit,0.975, na.rm = T))) + 
+  facet_wrap(~ProsperCreditGrade) + 
+  geom_smooth() +
+  ggtitle("Loan interest rate vs average credit score, separated by Prosper Credit Grade under the New Rating System")
+
+
+#Unable to print correlations in each facet due to errors with variables
+
+# cors <- 
+#   ddply(subset(loans, ProsperRatingSystem=="New Rating System" &
+#                      !is.na(avgCredit)), .(ProsperCreditGrade), 
+#         summarise, 
+#         cor = round(cor(BorrowerRate, avgCredit), 3))
+
+#geom_text(data=cors, aes(label=paste("r=", cor, sep="")), x=1, y=-0.25)
+
+```
+
+It is interesting to see the change in variability of interest rates and credit scores among each credit rating group. Whereas the group rated "AA" generally all have high credit scores and low interest rates, "C" and "D" rated borrowers have much more variability in both metrics. "HR" rated borrowers are generally relegated to the highest interest rates, even though some in this group have credit scores similar to those in the "AA" group.
+
+****
+
+```{r prosper_rate_boxcredit, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, ProsperRatingSystem=="New Rating System"), 
+       aes(x = ProsperCreditGrade, y = BorrowerRate)) +
+  geom_boxplot() + facet_wrap(~avgCredit)
+```
+
+Regardless of credit score, a borrower's interest rate typically increases as their Prosper Credit Grade decreases.
+
+****
+
+```{r d2ir_investors_loantype, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+#Are investors more likely to invest in high D2I borrowers if the loan is a consolidation?
+loans$isConsolidation <- (ifelse(loans$ListingCategory..numeric. == 1, 
+                                 "Consolidation Loan", "Other Loan"))
+
+p7 <- ggplot(data = subset(loans, !is.na(DebtToIncomeRatio)),  
+             aes(x = round(DebtToIncomeRatio/200, digits = 4)*200, 
+                 y = Investors)) +
+  geom_line(stat = "summary", fun.y = mean) + facet_wrap(~isConsolidation) + 
+  scale_x_continuous(limits = c(quantile(subset(loans, 
+                                                !is.na(DebtToIncomeRatio))$
+                                           DebtToIncomeRatio, 0.025), 
+                                quantile(subset(loans, 
+                                                !is.na(DebtToIncomeRatio))$
+                                           DebtToIncomeRatio, 0.975))) + 
+  geom_smooth()
+
+p8 <- ggplot(data = subset(loans, !is.na(DebtToIncomeRatio)), 
+             aes(x = round(DebtToIncomeRatio/200, digits = 4)*200, 
+                 y = Investors, color = originalBucket)) + 
+  facet_wrap(~isConsolidation) +
+  scale_x_continuous(limits = c(quantile(subset(loans, 
+                                                !is.na(DebtToIncomeRatio))$
+                                           DebtToIncomeRatio, 0.025), 
+                                quantile(subset(loans, 
+                                                !is.na(DebtToIncomeRatio))$
+                                           DebtToIncomeRatio, 0.975))) + 
+  geom_smooth()
+
+grid.arrange(p7,p8)
+
+```
+
+While loans with borrowers that have higher Debt to Income Ratios generally attract fewer investors per loan, oddly, Non-Debt Consolidation loans do not suffer this decline as drastically. As we have seen, those borrowers securing debt consolidation loans have a higher debt to income ratio at the time of application. One would assume that a high debt to income ratio would not affect investor behavior on these loans as much as with other loans, yet it does. One possible reason for this decline is that investors may actually feel more confident in the Debt Consolidation Loans in general and thus are comfortable investing a higher percentage of the original loan amount.
+
+****
+
+```{r delinquencies_credit_prosper_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x = DelinquenciesLast7Years, y = avgCredit)) +
+  geom_point(position = position_jitter(w=1), alpha = 1/10) + 
+  facet_wrap(~CreditSystem) + 
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 
+                                         0.975, na.rm = T))) + 
+  scale_x_sqrt(limits = c(quantile(loans$DelinquenciesLast7Years, 
+                                         0.025, na.rm = T), 
+                                quantile(loans$DelinquenciesLast7Years, 
+                                         0.975, na.rm = T))) +
+  geom_smooth(aes(color = ProsperCreditGrade))
+```
+
+I wanted to find out how differently each credit score provider factored delinquencies into the score calculation. We previously found that the biggest difference in credit score with regard to delinquencies was between borrowers with zero or one delinquency and everyone else. We see this again here, but interestingly, it appears that scores under the FICO08 system take a much bigger hit with 2 or more delinquencies. With this system, not only are the highest scores reserved for those with little to no delinquencies, those with 10 or more in the last seven years have credit scores that are effectively maxed out between 700 and 725 and much more likely to be in the 600's. On the flip side, borrowers with more than 30 delinquencies under the ScoreX system have scores ranging from 550 to over 800! 
+
+****
+
+```{r openrevolving_credit_income_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, !is.na(StatedMonthlyIncome) & 
+                       StatedMonthlyIncome <= 
+                       quantile(loans$StatedMonthlyIncome, 0.975) & 
+                       StatedMonthlyIncome >= 
+                       quantile(loans$StatedMonthlyIncome, 0.025)), 
+       aes(x= OpenRevolvingMonthlyPayment, y = avgCredit, 
+           color = statedIncomeBucket)) + 
+  geom_point(alpha = 1/20, position = position_jitter()) + 
+  scale_x_continuous(limits = 
+                       c(quantile(loans$OpenRevolvingMonthlyPayment, 
+                                  0.005, na.rm = T), 
+                         quantile(loans$OpenRevolvingMonthlyPayment, 
+                                  0.995, na.rm = T))) + 
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 
+                                         0.975, na.rm = T))) + 
+  facet_wrap(~CreditSystem, ncol = 1) + geom_smooth()
+```
+
+Correlation Coefficient of avgCredit and OpenRevolvingMonthlyPayment:
+```{r openrevolving_credit_cor, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+pander(as.numeric(cor.test(loans$OpenRevolvingMonthlyPayment, 
+                loans$avgCredit)$estimate))
+```
+
+I initially wanted to see if open credit monthly payments negatively affected credit score, but quickly realized that someone making $1000/month would be much more affected by a $500 monthly credit card bill than would someone making $15,000/month. For the plot above, I split the data into the top half and bottom half of earners by stated monthly income. I expected to see a significant decline in average credit score among the bottom half of earners as the actual dollar amount of monthly revolving payment went up. Oddly, it stayed relatively flat and even matched the trend of the top half earners. I suspect that this is not something factored into score as much as it is factored into loan eligibility and underwriting.
+
+****
+
+```{r delinquencies_ccutil_loantype, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(y = BankcardUtilization, 
+                         x = DelinquenciesLast7Years)) + geom_smooth() + 
+  coord_cartesian(xlim = c(0, quantile(loans$DelinquenciesLast7Years, 
+                                       0.975, na.rm = T)), ylim = c(0,1)) + 
+  facet_wrap(~ListingCategory..numeric.)
+
+```
+
+When looking at the plot, 4 facets stand out to me as different than the rest. #4 (Personal Loan), #8 (Baby & Adoption), #10 (Cosmetic Procedure), #11 (Engagement Ring) are the four that I think call out for further investigation. While the comedian in me wants to show the variability or positive relationship in these facets as consistent with other poor life choices, as shown by their type of loan applied for, I believe the actual answer is much simpler and less funny.
+In total, these four loan categories account for just over 2.5% of the dataset; most of which is the personal loans. With more examples, I would expect to see these plots exhibit regression to the mean as with the other plots.
+
+
+****
+
+```{r income_original_loantype, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+
+ggplot(data = loans, aes(x = StatedMonthlyIncome, y = LoanOriginalAmount)) +
+  facet_wrap(~ListingCategory..numeric.) + 
+  geom_point(alpha=1/20) + 
+  scale_x_sqrt(limits = c(quantile(loans$StatedMonthlyIncome, 0.025), 
+                          quantile(loans$StatedMonthlyIncome, 0.975))) + 
+  geom_smooth()
+```
+
+I was curious to see if, on average, the original loan amount increases when stated monthly income increases. The thought is that those with more money either need more money to maintain a lifestyle or are eligible to receive (and more importantly pay back) more money. Faceting by loan type seems to have helped highlight this as the biggest differences in loan amount between lower income earners and higher earners were the following loan categories: Debt Consolidation, Home Improvement, Business, Large Purchase, and Wedding. With all of these categories, loans are likely higher among top income earners in order to maintain a lifestyle (Debt Consolidation, Home Improvement, Large Purchase, Wedding) or because the borrower is more likely to produce a return on investment (Debt Consolidation, Home Improvement, Business).
+
+****
+
+```{r original_d2ir_loantype, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x = LoanOriginalAmount, y = DebtToIncomeRatio)) +
+  facet_wrap(~ListingCategory..numeric.) + geom_smooth()
+```
+
+Other than loans that did not report a category, Student Loans were the only group where the borrower's debt to income ratio went up as their borrowed loan amount goes up.
+
+****
+
+```{r credit_apr_loantype, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x = avgCredit, y = BorrowerAPR)) +
+  scale_x_continuous(limits = c(500,850)) +
+  facet_wrap(~ListingCategory..numeric.) + geom_smooth()
+```
+
+As loan type would not affect the relationship between two credit variables that were recorded before the loan was processed, each of these looks very much the same. 
+
+****
+
+```{r credit_delinquencies_homeowner_credit_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = subset(loans, DelinquenciesLast7Years>0) , 
+       aes(x=avgCredit, y=DelinquenciesLast7Years)) + 
+  geom_smooth() + facet_grid(IsBorrowerHomeowner ~ CreditSystem) + 
+  coord_cartesian(xlim = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                           quantile(loans$avgCredit, 0.975, na.rm = T))) + 
+  geom_line(stat = "summary", fun.y = mean)
+
+```
+
+The number of delinquencies in a borrower's credit history seems to affect credit score in a similar fashion among a given score provider's data, regardless of whether the borrower was a homeowner. It seems as though all debt is the same when it comes to this part of the credit score calculation.
+
+****
+
+```{r prosper_delinquencies_rating_system, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10}
+ggplot(data = loans, aes(x=ProsperCreditGrade, y=DelinquenciesLast7Years)) +
+  geom_boxplot() + facet_wrap(~ProsperRatingSystem) + 
+  coord_cartesian(ylim = c(0,18))
+```
+
+Delinquency Summary of Borrowers with the Old Rating System :
+```{r prosper_delinquencies_rating_system_old, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, ProsperRatingSystem == 
+                 "Old Rating System")$DelinquenciesLast7Years))
+```
+
+Delinquency Summary of Borrowers with the New Rating System:
+```{r prosper_delinquencies_rating_system_new, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, ProsperRatingSystem == 
+                 "New Rating System")$DelinquenciesLast7Years))
+```
+
+The new Prosper Rating System is much less forgiving on number of delinquencies in the borrower's recent history. Not only are the medians equal or lower across the board, the third quartile numbers among the lower rated borrowers are much lower with the new system. One example that highlights this change is, looking only at the comparison of these variables,  "C" rated borrowers in the old system appear to share compositional characteristics with "E" rated borrowers with the new system. I found MANY articles that suggested Prosper has struggled with repayment of it's investors, so I wonder if the new rating system weighed delinquency more heavily to combat this. 
+
+****
+
+```{r investors_delinquencies_prosper, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+ggplot(data = loans, aes(x = as.numeric(DelinquenciesLast7Years), 
+                         y = Investors, color = ProsperCreditGrade)) +
+  geom_smooth() + scale_x_continuous(limits = c(0,40)) + 
+  facet_wrap(~ProsperRatingSystem) + scale_y_sqrt()
+
+```
+
+Higher rates of delinquencies don't necessarily mean lower investors per loan for a given Prosper Credit Grade, but each subset does see greater variability in investors per loan as the borrower's delinquencies go up.
+
+****
+
+Investor Summary:
+```{r investor_summaries, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+pander(summary(loans$Investors))
+```
+
+Investor Summary of "ScoreX" Loans:
+```{r investor_summaries_1, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, CreditSystem=="ScoreX")$Investors))
+```
+
+Investor Summary of "FICO08" Loans:
+```{r investor_summaries_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+pander(summary(subset(loans, CreditSystem=="FICO08")$Investors))
+
+```
+
+```{r new_ggcorr_vars, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+loans$ProsperCreditGrade_num <- as.numeric(loans$ProsperCreditGrade)
+loans$IsBorrowerHomeowner_num <- as.numeric(loans$IsBorrowerHomeowner)
+loans$FirstCredit_num <- as.numeric(loans$FirstRecordedCreditLine)
+
+loans$month <- 
+  month(as.POSIXct((round(as.numeric(as.POSIXct(loans$LoanOriginationDate)) / 
+                            2629800) * 2629800), 
+                   origin = "1969-12-31 19:00:00"))
+
+loans$year <- 
+  year(as.POSIXct((round(as.numeric(as.POSIXct(loans$LoanOriginationDate)) / 
+                           2629800)*2629800), origin = "1969-12-31 19:00:00"))
+
+loans$calculatedMonth <- ((loans$year-2005)*12)+loans$month
+
+loanInvestors <- loans %>% group_by(calculatedMonth, ProsperCreditGrade) %>% 
+  dplyr::summarize (n = n()) %>% mutate(proportion = n / sum(n))
+
+```
+
+```{r investors_ggcorr, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=7}
+
+ggcorr(dplyr::select(loans, 1:4, 34, 18, 20, 33, 30, 22), 
+       low = "steelblue", mid = "white", high = "darkred", label = TRUE, 
+       angle = -15, size=4, hjust=0.85, label_round = 2) +
+  ggtitle("Correlation Matrix with Focus on Investors")
+
+```
+
+****
+
+```{r scorex_ggcorr, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=8}
+
+ggcorr(dplyr::select(subset(loans, CreditSystem=="ScoreX"), 35, 9:18, 33, 30), 
+       low = "steelblue", mid = "white", high = "darkred", label = TRUE, 
+       angle = -15, size = 4, hjust = 0.9, label_round = 2, layout.exp = 2) +
+  ggtitle("Correlation Matrix with ScoreX Loans")
+
+```
+
+####Prosper Grade Linear Regression with "ScoreX" Loans:
+```{r scorex_linear, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+m1 <- lm(log(as.numeric(ProsperCreditGrade)) ~ log(avgCredit), 
+         data = subset(loans,CreditSystem == "ScoreX"))
+m2 <- update(m1, ~ . + AvailableBankcardCredit)
+m3 <- update(m2, ~ . + BankcardUtilization)
+m4 <- update(m3, ~ . + InquiriesLast6Months)
+m5 <- update(m4, ~ . + DelinquenciesLast7Years)
+m6 <- update(m5, ~ . + OpenRevolvingAccounts)
+m7 <- update(m5, ~ . + OpenCreditLines)
+m8 <- update(m7, ~ . + as.numeric(FirstRecordedCreditLine))
+m9 <- update(m8, ~ . + OpenRevolvingMonthlyPayment)
+m10 <- update(m9, ~ . + RevolvingCreditBalance)
+m11 <- update(m10, ~ . + TotalCreditLinespast7years)
+m12 <- update(m11, ~ . + DebtToIncomeRatio)
+
+
+#mtable(m1, m2, m3, m4, m5)
+#mtable(m6, m7, m8, m9)
+pander(mtable(m10,m11,m12))
+```
+
+****
+
+```{r old_system_prosper_correlations, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=8}
+
+ggcorr(dplyr::select(subset(loans, ProsperRatingSystem=="Old Rating System"), 
+                     35, 9:18, 30, 33), 
+       low = "steelblue", mid = "white", high = "darkred", label = TRUE, 
+       angle = -8, size = 4, hjust = 0.9, label_round = 2, layout.exp = 2) +
+  ggtitle("Correlation Matrix with the Old Prosper Rating System")
+
+```
+
+
+####Old Propser Rating Linear Regression:
+```{r old_system_linear_model, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+n1 <- lm(as.numeric(ProsperCreditGrade) ~ avgCredit, 
+         data = subset(loans, ProsperRatingSystem=="Old Rating System"))
+n2 <- update(n1, ~ . + AvailableBankcardCredit)
+n3 <- update(n2, ~ . + BankcardUtilization) 
+
+pander(mtable(n1, n2, n3))
+
+```
+
+****
+
+
+```{r prosper_credit_spine, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=10}
+
+spineplot(as.factor(subset(loans, 
+                           ProsperRatingSystem == "New Rating System" & 
+                             CreditSystem == "FICO08")$avgCredit) ~ 
+            as.factor(subset(loans, 
+                             ProsperRatingSystem == "New Rating System" & 
+                               CreditSystem == "FICO08")$ProsperCreditGrade), 
+          col = rainbow(11),
+          off = 1,
+          xlab = "Prosper Credit Grade",
+          ylab = "Avgerage Credit Score",
+          main = "Credit Score Composition for Each Credit Grade 
+          with the New Rating System")
+legend(x = 0.5, y = 1, 
+         legend = rev(c('649.5', '669.5', '689.5', '709.5', '729.5', '749.5', 
+                    '769.5', '789.5', '809.5', '829.5', '849.5')), 
+       fill = rev(rainbow(11)), 
+       col = rainbow(11))
+
+```
+
+As we would expect and have show previously, the distribution of credit grades is somewhat normal, with "C" rated borrowers being the most frequent. Also, with each credit grade, borrowers with lower score comprise a larger percentage of the group and those with higher scores comprise less. None of this is surprising given our previous findings, but it is interesting to see the composition visually. 
+
+****
+
+```{r proportion_of_investors_per_month, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+#as.numeric(as.POSIXct('2016-02-07 13:38:00'))
+
+#as.POSIXct(1454279400, origin = "1969-12-31 19:00:00")
+
+ggplot(data = loanInvestors, aes(x = calculatedMonth, y = proportion, 
+                                 fill = proportion, width = 3)) +
+  geom_bar(stat = "identity") + facet_wrap(~ProsperCreditGrade) +
+  scale_y_sqrt() + geom_smooth(color = "red") +
+  scale_fill_gradient()
+
+```
+
+Throughout the analysis, I became intrigued by the question of how Investor behavior is affected by various factors, events of variables. The plot above shows what proportion of total investors per month was allocated to each Prosper Credit Grade. In other words, which letter grades draw the attention (and funds) of the investors and how has this changes over time? Surprisingly, we see major changes throughout the data, where loans become more or less popular. If I were to push this further, I might look at major changes happened on the site to see if these coincide with the shifts we see. This would include changes to the rating systems or any legal action, which is what I suspect caused the huge gap around month 50.
+
+****
+
+####Using a linear model to explain the variation in Prosper Credit Grade
+```{r prosper_rating_log, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+# plot(as.numeric(subset(loans, ProsperRatingSystem == "New Rating System" & 
+#                          CreditSystem == "FICO08")$ProsperCreditGrade) ~ 
+#        subset(loans, ProsperRatingSystem == "New Rating System" & 
+#                 CreditSystem == "FICO08")$avgCredit)
+
+# ggplot(data =subset(loans, ProsperRatingSystem == "New Rating System" & 
+#                       CreditSystem == "FICO08"), 
+#        aes(log(avgCredit), log(as.numeric(ProsperCreditGrade)))) + 
+#   geom_point(position = position_jitter()) +
+#   geom_line(stat = "summary", fun.y = mean, colour = "blue", size = 2) 
+
+ggplot(data =subset(loans, ProsperRatingSystem == "New Rating System" & 
+                      CreditSystem == "FICO08"), 
+       aes(log(avgCredit), log(as.numeric(ProsperCreditGrade)))) + 
+  geom_point(alpha = 1/20, position = position_jitter(h=0.45, w=0.0365)) +
+  geom_smooth()
+```
+
+I subset the data to include only loans with the newest rating system and credit scores from FICO08, so I can try to come up with a formula that would produce an estimate for Prosper Credit Grade during this era. Applying a log transformation to Prosper Credit Grade and avgCredit produced a plot that appeared to be the most linear, which will hopefully give us a decent base on which to create a linear model. The plot below will help determine other variables that will help refine the model.
+
+```{r ggcorr_new_system_fico, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=8}
+
+ggcorr(dplyr::select(subset(loans, ProsperRatingSystem == 
+                               "New Rating System" & CreditSystem=="FICO08"), 
+                     30, 35, 9:18, 33), 
+       low = "steelblue", mid = "white", high = "darkred", label = TRUE, 
+       angle = -11, size=4, hjust=0.85, label_round = 2, layout.exp = 2) +
+  ggtitle("Correlation Matrix with Loans Under the New Prosper Rating System and FICO08 Credit Scores")
+
+```
+
+```{r prosper_linear_model, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE}
+
+o1 <- lm(log(as.numeric(ProsperCreditGrade)) ~ log(avgCredit), 
+         data = subset(loans, ProsperRatingSystem == "New Rating System" & 
+                         CreditSystem == "FICO08"))
+o2 <- update(o1, ~ . + AvailableBankcardCredit)
+o3 <- update(o2, ~ . + BankcardUtilization) 
+o4 <- update(o3, ~ . + DebtToIncomeRatio) 
+o5 <- update(o4, ~ . + InquiriesLast6Months) 
+o6 <- update(o5, ~ . + DelinquenciesLast7Years) 
+o7 <- update(o6, ~ . + as.numeric(FirstRecordedCreditLine))
+
+#mtable(o1, o2, o3)
+pander(mtable(o5, o6,o7))
+
+```
+
+```{r dataset_odditities, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, eval=FALSE}
+#Dataset Oddities
+
+
+#lowAPR_badCredit
+summary(subset(loans, BorrowerAPR < 0.08 & avgCredit < 580))         
+
+#highAPR_goodCredit
+summary(subset(loans, BorrowerAPR > 0.35 & avgCredit > 800))
+
+#highMonthly_lowD2I
+summary(subset(loans, 
+               loans$OpenRevolvingMonthlyPayment > 1200 & 
+                 DebtToIncomeRatio < 0.08))
+ 
+#highPCG_highDelinq
+summary(subset(loans, ProsperCreditGrade=="AA" & DelinquenciesLast7Years > 20))
+
+#highPCG_highDebt2Credit
+summary(subset(loans, ProsperCreditGrade=="AA" & DebtToIncomeRatio > 1))
+
+#lowPCG_highCredit
+summary(subset(loans, ProsperCreditGrade=="HR" & avgCredit > 780))
+
+#goodCredit_highDebt2Income
+summary(subset(loans, avgCredit > 780 & DebtToIncomeRatio > 1))
+
+```
+
+****
+
+##Multivariate Analysis
+
+###Talk about some of the relationships you observed in this part of the investigation. Were there features that strengthened each other in terms of looking at your feature(s) of interest?
+
+During the span of time covered by the dataset, Prosper changed how it's proprietary grading system was calculated as well as it's provider of credit scores. After both changes, large changes in investor behavior could be observed. The changes to it's grading system and credit score provider likely coincided with or even inspired a boom in investor confidence. While the number of individual investments per day went up significantly after the change in providers, from 2879 per day to 4972, the median investors per loan went from 62 during the ScoreX era to 1 after FICO08 was introduced. Also, with the new Prosper rating system, interest rates per credit grade appear to vary much less than with the old system, indicating that common rates are likely assigned to particular grades and/or the requirements for each grade had been strengthened.  Blog posts around this time indicate that investors with large amounts of capital were flooding to the site and fully funding loans more often than before, which is consistent with what we see in the data.
+
+While the lowest interest rate loans were the most likely to have a high investor count and investors decline as interest rates go up, almost all loan types have increased investors at the higher end of their possible interest rates. I suspect that as interest rates go up, the borrowers generally present more risk to the investors, leading to less investors being interested in funding the loans. However, at the higher end of the spectrum, investors likely cant resist the potential return from the favorable rates.
+
+In all instances except the lowest credit score range, the new credit score source meant lower mean interest rates and less variability within each score group. Given we know that the scores from each of these systems are calculated very differently and have a different range of possibilities, I believe that the variance we see is due to different populations occupying the score ranges, rather than the new system being used by Prosper to issue lower interest rates for the same credit score range.
+
+While loans with borrowers that have higher Debt to Income Ratios generally garner fewer investors per loan, oddly, Non-Debt Consolidation loans do not suffer this decline as drastically. As we have seen, those borrowers securing debt consolidation loans have a higher debt to income ratio at the time of application. One would assume that a high debt to income ratio would not affect investor behavior on these loans as much as with other loans, yet it does. One possible reason for this decline is that investors may actually feel more confident in the Debt Consolidation Loans in general and thus are comfortable investing a higher percentage of the original loan amount. Other than loans that did not report a category, Student Loans were the only group where the borrower's debt to income ratio went up as their borrowed loan amount goes up.
+
+When comparing monthly payment to original loan amount, we see a fairly linear relationship, with the majority of the variation due to APR. When split by term, we see that loans with a 12 month term had the greatest variance in APR, but the 36 month loans had the highest mean and the most extreme outliers, which are also indications of variability. This is verified by the plots.
+
+###Were there any interesting or surprising interactions between features?
+
+It was fascinating to see the comparison between debt to income ratio and average credit score. Among most of the Prosper Grade groups, higher debt to income ratio actually lead to a higher average credit score, which is counter intuitive. The credit score provider and Prosper Rating System also had an effect on the relationship, with each combination producing very different results. The highest Prosper graded borrowers were the only group to consistently see a decline in credit score with increased debt to income ratio, which begs the question: Is a little bit of debt actually good for your credit?
+
+The relationship between Open Credit Lines and Debt to Income was much less lineal or dramatic than I expected as well. In fact homeowners in the dataset with 40 or more open lines of credit actually have a lower debt to income ratio on average than those with only 35 open lines of credit. Non-Homeowners with more than 35 open lines of credit generally have a higher debt to income ratio than homeowners, but there is not a significant amount of difference between the two subsets among those with less than 35 open lines of credit.
+
+Next, when comparing Delinquencies to Credit Score, it was interesting to see some borrowers that were assigned grades of 'AA' or 'A' that had much lower credit scores or higher numbers of delinquencies during the last 7 years, yet retained their relatively high grade. Similarly, there were some borrowers with the low grade of 'E', yet credit scores of nearly 750 and very few delinquencies. This was much less common after the switch to FICO08 credit scores, however. With the switch to the new rating system and credit score provider, it would appear that standards for each grade were strengthened. One good example of this is seen when looking at delinquencies per Prosper Grade and realizing that borrowers with higher delinquencies were much less likely to be approved for loans on Prosper after the switch.
+
+Finally, it was interesting to see that regardless of the length of the term, those borrowers of loans from $3500-6000 generally received the highest APR. Bigger and smaller loans generally lead to lower APRs, whereas I would have expected this to be more linear.
+
+###OPTIONAL: Did you create any models with your dataset? Discuss the strengths and limitations of your model.
+
+After noticing a seeming linear relationship between credit scores and Prosper credit grades under the old rating system, I created a linear model using each of these variables and two related to bank card utilization. I found that credit score and bank card utilization accounted for 96.7% of the variance in Prosper Credit Grades.
+
+However, this felt like cheating as the old rating system was extremely simplified, so I set out to create a model that would predict the Prosper credit grade with the new rating system as well as the new credit score provider. Unfortunately, even with the inclusion of a number of personal credit variables, the model was only able to account for approximately 51.4% of the variance in the grade. I suspect that the new rating system might have taken into account past activity on Prosper, the variables for which, I did not include in my subset of the data. 
+
+****
+
+#Final Plots and Summary
+
+****
+
+##Plot One
+
+```{r alternate_final_plot_1, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=9, eval=FALSE}
+p11 <- ggplot(data = loans, aes(x = ProsperCreditGrade, y = avgCredit, 
+                                fill = ProsperCreditGrade)) +
+  geom_boxplot() + 
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 
+                                         0.975, na.rm = T))) + 
+  facet_wrap(~ProsperRatingSystem) +
+  ggtitle("Differences Between Prosper Grading Systems") +
+  ylab("Average Credit Score") +
+  xlab("Prosper Credit Grade") +
+  guides(fill=FALSE)
+
+
+p12 <- ggplot(data = loans, aes(x = avgCredit)) +
+  geom_histogram(aes(y=(..count..)/tapply(..count..,..PANEL..,sum)[..PANEL..]),
+                 binwidth = 10) + 
+  scale_x_continuous(limits = c(500,889.5), breaks = seq(529.5,849.5,40)) + 
+  facet_wrap(~CreditSystem) +
+  scale_y_continuous(labels = percent) +
+  ggtitle("Differences Between Credit Score Providers") +
+  ylab("Percentage of Credit Scores Issued") +
+  xlab("Average Credit Score")
+
+grid.arrange(p11, p12,  
+             top = "Credit Score Provider and 
+             Credit Rating System Comparisons")
+
+```
+
+```{r final_plot_1, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=9}
+p11 <- ggplot(data = loans, aes(x = ProsperCreditGrade, y = avgCredit, 
+                                fill = ProsperRatingSystem)) +
+  geom_boxplot() + 
+  scale_y_continuous(limits = c(quantile(loans$avgCredit, 0.025, na.rm = T), 
+                                quantile(loans$avgCredit, 0.975, na.rm = T))) +
+  ggtitle("Difference Between Prosper Grading Systems") +
+  ylab("Average Credit Score") +
+  xlab("Prosper Credit Grade")
+
+
+p12 <- ggplot(data = loans, aes(x = avgCredit, fill = CreditSystem)) +
+  geom_histogram(aes(y=(..count..)/tapply(..count..,..group..,sum)[..group..]),
+                 binwidth = 10, position = "dodge", origin = 4.75) + 
+  scale_x_continuous(limits = c(500,889.5), breaks = seq(529.5,849.5,40)) + 
+  scale_y_continuous(labels = percent) +
+  ggtitle("Difference Between Credit Score Providers") +
+  ylab("Percentage of Credit Scores Issued") +
+  xlab("Average Credit Score")
+
+grid.arrange(p11, p12,  
+             top = "Credit Score Provider and Credit Rating System Comparisons")
+
+```
+
+###Description One
+While every borrower in the dataset was assigned a Credit Grade by Prosper, and nearly every loan listed the borrower's credit score range, fundamental changes to how each was derived occurred during the time span covered by the dataset.  Understanding these differences informs all future analysis of this data with respect to each variable.
+
+First, the new Prosper Rating System is much more nuanced than the old system and less linear too. With a Pearson product-moment correlation coefficient of nearly 0.98, the relationship between Prosper Credit Grade and Average Credit Score using the old Prosper Rating System is almost perfectly linear. The same relationship under the new rating system produces a correlation coefficient of approximately 0.55, suggesting that the new rating system used much more than credit score to calculate each grade.
+
+Second, the credit scores provided by FICO08 have a different range and distribution than those provided by ScoreX. Though the scores from each provider have an identical median of 689.5 and a similar mean (694.4 for ScoreX and 700 for FICO08), the range of ScoreX scores from 9.5 to 889.5 was vastly different than the range of FICO08 scores (649.5 to 849.5). Furthermore, visual inspection of the distributions reveal how truly different the subsets are. 
+
+****
+
+##Plot Two
+
+```{r final_plot_2, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=8}
+p13 <- ggplot(data = loans, aes(x = originalBucket, y = BorrowerRate, 
+                                fill = originalBucket)) + 
+  geom_boxplot() +
+  coord_cartesian(ylim = c(quantile(loans$BorrowerRate, 0.05), 
+                           quantile(loans$BorrowerRate, 0.95))) + 
+  scale_y_continuous(labels = percent) +
+  scale_x_discrete(labels = c("$0-3,500", "$3,500-6,000", "$6000-11,500", 
+                              "$11,500-35,000")) + 
+  ggtitle("Interest Rates by Original Loan Amount") +
+  ylab("Interest Rate") +
+  xlab("Original Loan Amount") +
+  guides(fill=FALSE) +
+  scale_fill_brewer(palette="GnBU")
+
+p5 <- ggplot(data = loans, aes(x = ProsperCreditGrade, y = BorrowerRate, 
+                               fill = ProsperCreditGrade)) +
+  geom_boxplot() + 
+  scale_y_continuous(limits = c(quantile(loans$BorrowerRate, 0.025), 
+                                quantile(loans$BorrowerRate, 0.975)), 
+                     labels = percent) + 
+  guides(fill=FALSE) +
+  ggtitle("Interest Rates by Prosper Credit Grade") +
+  ylab("Interest Rate") +
+  xlab("Propser Credit Grade")
+
+p6 <- ggplot(data = loans, aes(x = as.factor(Term), y = BorrowerRate, 
+                               fill = as.factor(Term))) + 
+  geom_boxplot() + 
+  scale_y_continuous(limits = c(quantile(loans$BorrowerRate, 0.025), 
+                                quantile(loans$BorrowerRate, 0.975)), 
+                     labels = percent) +
+  ggtitle("Interest Rates by Loan Term") +
+  ylab("Interest Rate") +
+  xlab("Term") +
+  guides(fill=FALSE) +
+  scale_fill_brewer(palette="RdBu")
+
+grid.arrange(p6, p13, p5, 
+             top = "Factors in Determining Borrower Interest Rate")
+
+```
+
+
+###Description Two
+More than any other variable, Prosper appears to assign interest rates to loans based on the borrower's Credit Grade. The Credit Grade itself if calculated by a number of these variables, but none are individually correlated to the interest rate more than the Credit Grade. For example, approximately 20% of the variation in Borrower Rate is explained by a loan's term, 33% is explained by a loan's amount but nearly 88% of Borrower Rate variation is explained by the Credit Grade.
+
+****
+
+##Plot Three
+
+```{r final_plot_3, cache=TRUE, cache.path = 'cache/', fig.path='figure/', message=FALSE, warning=FALSE, echo=FALSE, fig.width=10, fig.height=6}
+ggplot(data = loanInvestors, aes(x = calculatedMonth, y = proportion, 
+                                 fill = proportion, width = 2)) +
+  geom_bar(stat = "identity") + 
+  facet_wrap(~ProsperCreditGrade, scales = "free_x") +
+  scale_y_continuous(breaks = c(0.1, 0.2, 0.3, 0.4), labels = percent) + 
+  scale_x_continuous(breaks = seq(13,109,24), 
+                     labels = c("2006", "2008", "2010", "2012", "2014")) +
+  geom_smooth(color = "red") +
+  coord_cartesian(xlim = c(17,111), ylim = c(0, 0.4)) +
+  scale_fill_gradient(labels = percent) +
+  ggtitle("Investors Per Quarter by Credit Grade") +
+  xlab("Year") +
+  ylab("Percentage of Investments Per Quarter") +
+  geom_vline(aes(xintercept=49, color = "Prosper Rating Change"), 
+             size=0.5, show.legend = F) +
+  geom_vline(aes(xintercept=105, color = "Credit Provider Change"), 
+             size=0.5, show.legend = F) +
+  theme(legend.position = "right", panel.margin = unit(0.25, "cm")) +
+  ggtitle(expression(atop("Investors Per Quarter by Credit Grade", 
+                          atop(italic("Blue Line - Prosper Rating Change    |    Orange Line - Credit Provider Change")))))
+
+```
+
+
+###Description Three
+Ultimately, the mission of Prosper is to unite borrowers with investors, so it is interesting to investigate what types of borrowers are attracted to over time. The plot above shows total investments per quarter over the length of the dataset, along with indications of when the Prosper Grading System changed as well as when the Credit Score Provider changed. I removed the first few months of data, as they were heavily skewed toward higher rated borrowers. Given the remaining data, it is safe to assume this is an anomaly due to the uncertainty of a new service. After the Grading System change, investors began investing more heavily in the lower rated borrowers, each of which saw a decline beginning around 2012. Looking at the back end of the timeline, we see that borrowers rated A, B and C saw a large uptick in investments relative to their positions 1-3 years prior.
+
+****
+
+##Reflection
+
+With well over 100,000 data points, it can be easy for nuance to be lost among a sea of averages. However, after breaking down the dataset and highlighting key variables, I have been able to tell stories with once muddy information. I have learned that rating credit-worthiness is an incredibly complex and proprietary process and that a few powerful people or algorithms are capable of having a massive impact on the. Look for instance at how differently credit scores are calculated and apportioned or how the change in Prosper's grading system impacted how investors analyzed and judged borrowers.
+
+A number of things surprised me in the dataset, such as how many borrowers with a high number of delinquencies in their past were given loans or how many borrowers were willing to take loans with interest rates higher than many available credit cards. But, I was also able to confirm a number of my theories and expectations as well. For instance, credit score and credit grade are both highly correlated with loan interest rates. Given that the website assigns rates based on these variables, it comes as no surprise.
+
+An additional theory that I sought to confirm was that when it comes to credit rating and credit scores, a little debt utilization is actually a good thing. I was please to find that, based on a number of metrics, those around the 25th percentile of available credit utilization were generally associated with higher credit scores than those with higher or lower utilization.
+
+One major limitation I see with this dataset is that it spans one of the most tumultuous economic time periods in the history of the United States. Time-based conclusions drawn from this dataset should consider what impact economic conditions had on the observed variables. 
+
+Finally, while I would have loved to come up with a golden model to perfectly predict a borrower's credit score, I found that it is far more complex than I originally expected. One can be sure that each company's model is very proprietary, focusing on factors that they specifically feel are more important. Given more time, broader data and a greater number of variables, I would be interested in "reverse engineering" a credit score, to find out how to boost my own score!
+
+
